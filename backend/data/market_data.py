@@ -1,1 +1,226 @@
 # Retrieves OHLCV price data, volume, and key market metrics via yfinance.
+#
+# NOTE — IV Rank approximation
+# ─────────────────────────────
+# The iv_rank returned by get_iv_rank() is NOT a true historical IV rank.
+# A proper IV Rank requires a full year of daily IV closes for the specific
+# ticker, which yfinance does not provide on the free tier.  As a proxy this
+# module uses the VIX (^VIX) 52-week high/low to anchor the range, then maps
+# the ticker's current ATM implied volatility into that range.  This produces
+# a reasonable *relative* reading but will differ from broker-grade IV Rank.
+#
+# For a thorough explanation of IV Rank and IV Percentile see:
+# https://www.tastytrade.com/learn-center/options/implied-volatility/iv-rank-and-percentile
+
+import asyncio
+import logging
+from typing import Any
+
+import pandas as pd
+import yfinance as yf
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Internal sync helpers  (always called via asyncio.to_thread)
+# ---------------------------------------------------------------------------
+
+def _fetch_current_price(ticker: str) -> float | None:
+    """Synchronous: return the most recent closing price for *ticker*."""
+    t = yf.Ticker(ticker)
+    hist = t.history(period="2d")   # 2d guard against empty last-day data
+    if hist.empty:
+        logger.warning("_fetch_current_price(%s): history returned empty DataFrame.", ticker)
+        return None
+    return float(hist["Close"].iloc[-1])
+
+
+def _fetch_iv_rank_data(ticker: str, lookback_days: int) -> dict[str, Any] | None:
+    """
+    Synchronous: collect everything needed to compute IV Rank.
+
+    Returns a dict with:
+        current_iv  – average ATM implied volatility from the nearest expiry chain
+        high_iv     – 52-week high IV (VIX proxy, expressed as a decimal)
+        low_iv      – 52-week low  IV (VIX proxy, expressed as a decimal)
+        used_vix    – True if the VIX fallback was used (always True here)
+        expiry      – expiration date string used for the chain
+        atm_count   – number of ATM contracts averaged
+    Returns None if any critical step fails.
+    """
+    # ── 1. Current price ────────────────────────────────────────────────────
+    price = _fetch_current_price(ticker)
+    if price is None or price <= 0:
+        return None
+
+    # ── 2. Nearest-expiry options chain ─────────────────────────────────────
+    t = yf.Ticker(ticker)
+    expirations = t.options
+    if not expirations:
+        logger.warning("_fetch_iv_rank_data(%s): no option expirations available.", ticker)
+        return None
+
+    expiry = expirations[0]
+    try:
+        chain = t.option_chain(expiry)
+    except Exception as exc:
+        logger.error("_fetch_iv_rank_data(%s): option_chain(%s) failed — %s", ticker, expiry, exc)
+        return None
+
+    calls: pd.DataFrame = chain.calls
+    puts:  pd.DataFrame = chain.puts
+
+    if calls.empty and puts.empty:
+        logger.warning("_fetch_iv_rank_data(%s): empty options chain for %s.", ticker, expiry)
+        return None
+
+    # ── 3. ATM filter — strikes within ±5 % of current price ───────────────
+    all_contracts = pd.concat([calls, puts], ignore_index=True)
+
+    # yfinance column is 'impliedVolatility' (camelCase)
+    if "impliedVolatility" not in all_contracts.columns:
+        logger.warning("_fetch_iv_rank_data(%s): impliedVolatility column missing.", ticker)
+        return None
+
+    atm_mask = (
+        all_contracts["strike"].notna()
+        & all_contracts["impliedVolatility"].notna()
+        & (all_contracts["impliedVolatility"] > 0)
+        & ((all_contracts["strike"] - price).abs() / price <= 0.05)
+    )
+    atm_contracts = all_contracts.loc[atm_mask]
+
+    if atm_contracts.empty:
+        # Widen to ±10 % before giving up
+        logger.warning(
+            "_fetch_iv_rank_data(%s): no ATM contracts within 5%% of %.2f — widening to 10%%.",
+            ticker, price,
+        )
+        atm_mask_wide = (
+            all_contracts["strike"].notna()
+            & all_contracts["impliedVolatility"].notna()
+            & (all_contracts["impliedVolatility"] > 0)
+            & ((all_contracts["strike"] - price).abs() / price <= 0.10)
+        )
+        atm_contracts = all_contracts.loc[atm_mask_wide]
+
+    if atm_contracts.empty:
+        logger.warning("_fetch_iv_rank_data(%s): still no valid ATM contracts — skipping.", ticker)
+        return None
+
+    current_iv: float = float(atm_contracts["impliedVolatility"].mean())
+    atm_count: int    = len(atm_contracts)
+
+    # ── 4. 52-week IV range via VIX proxy ───────────────────────────────────
+    # VIX closes are in percentage-point form (e.g. 18.5 → 18.5 %).
+    # yfinance impliedVolatility is in decimal form (e.g. 0.35 → 35 %).
+    # Divide VIX by 100 to align scales.
+    logger.warning(
+        "get_iv_rank(%s): yfinance does not expose historical per-ticker IV. "
+        "Using VIX 52-week range as IV high/low proxy — result is approximate.",
+        ticker,
+    )
+
+    period_flag = "1y" if lookback_days >= 252 else f"{lookback_days}d"
+    vix = yf.Ticker("^VIX")
+    vix_hist = vix.history(period=period_flag)
+
+    if vix_hist.empty:
+        logger.error("_fetch_iv_rank_data: VIX history unavailable.")
+        return None
+
+    high_iv: float = float(vix_hist["Close"].max()) / 100
+    low_iv:  float = float(vix_hist["Close"].min()) / 100
+
+    return {
+        "current_iv": current_iv,
+        "high_iv":    high_iv,
+        "low_iv":     low_iv,
+        "used_vix":   True,
+        "expiry":     expiry,
+        "atm_count":  atm_count,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Public async API
+# ---------------------------------------------------------------------------
+
+async def get_current_price(ticker: str) -> float | None:
+    """
+    Return the most recent closing price for *ticker* as a float.
+
+    yfinance is synchronous; the blocking call is offloaded to a thread pool
+    via asyncio.to_thread() so the event loop is never blocked.
+
+    Returns:
+        The closing price as a float, or None if the fetch fails.
+    """
+    try:
+        price = await asyncio.to_thread(_fetch_current_price, ticker)
+        if price is None:
+            return None
+        logger.debug("get_current_price(%s) → %.4f", ticker, price)
+        return price
+    except Exception as exc:
+        logger.error("get_current_price(%s) raised an unexpected error: %s", ticker, exc, exc_info=True)
+        return None
+
+
+async def get_iv_rank(ticker: str, lookback_days: int = 252) -> float | None:
+    """
+    Return an approximate IV Rank (0–100) for *ticker*.
+
+    IV Rank = (current_iv − 52w_low_iv) / (52w_high_iv − 52w_low_iv) × 100
+
+    current_iv  is the average implied volatility of ATM options (strikes
+                within 5 % of the spot price) at the nearest expiry.
+    52w high/low are derived from the VIX 52-week range as a proxy, because
+                yfinance does not expose historical per-ticker IV on the free
+                tier.  A warning is logged whenever this fallback is used.
+
+    Args:
+        ticker:        The equity symbol (e.g. "AAPL").
+        lookback_days: Number of trading days to consider for the IV range
+                       (default 252 ≈ one trading year).
+
+    Returns:
+        A float clamped to [0, 100], or None if the computation fails.
+
+    See also:
+        https://www.tastytrade.com/learn-center/options/implied-volatility/iv-rank-and-percentile
+    """
+    try:
+        data = await asyncio.to_thread(_fetch_iv_rank_data, ticker, lookback_days)
+    except Exception as exc:
+        logger.error("get_iv_rank(%s): unexpected error in thread — %s", ticker, exc, exc_info=True)
+        return None
+
+    if data is None:
+        return None
+
+    current_iv = data["current_iv"]
+    high_iv    = data["high_iv"]
+    low_iv     = data["low_iv"]
+    iv_range   = high_iv - low_iv
+
+    if iv_range <= 0:
+        logger.warning(
+            "get_iv_rank(%s): IV range is zero or negative (high=%.4f, low=%.4f) — "
+            "returning None.",
+            ticker, high_iv, low_iv,
+        )
+        return None
+
+    raw_rank = (current_iv - low_iv) / iv_range * 100
+    iv_rank  = round(max(0.0, min(100.0, raw_rank)), 2)   # clamp to [0, 100]
+
+    logger.info(
+        "get_iv_rank(%s): current_iv=%.4f, vix_low=%.4f, vix_high=%.4f, "
+        "iv_rank=%.2f (atm_contracts=%d, expiry=%s, vix_proxy=%s)",
+        ticker, current_iv, low_iv, high_iv,
+        iv_rank, data["atm_count"], data["expiry"], data["used_vix"],
+    )
+
+    return iv_rank
