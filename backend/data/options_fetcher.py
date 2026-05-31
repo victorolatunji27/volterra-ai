@@ -5,6 +5,8 @@ import os
 from typing import Any
 
 import httpx
+import pandas as pd
+import yfinance as yf
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -209,6 +211,115 @@ async def fetch_unusual_options_flow() -> list[dict[str, Any]]:
 
     logger.info(
         "Options flow scan complete — %d/%d tickers succeeded. Top ticker: %s",
+        len(results), len(WATCHLIST),
+        top_10[0]["ticker"] if top_10 else "N/A",
+    )
+
+    return top_10
+
+
+# ---------------------------------------------------------------------------
+# yfinance-based implementation (no API key required)
+# ---------------------------------------------------------------------------
+
+def _fetch_ticker_flow_yf(ticker: str) -> dict[str, Any] | None:
+    """
+    Synchronous: fetch the nearest-expiry options chain for *ticker* via
+    yfinance and compute flow metrics.  Always called via asyncio.to_thread.
+
+    Returns a metrics dict or None if the ticker should be skipped.
+    """
+    t = yf.Ticker(ticker)
+
+    expirations = t.options
+    if not expirations:
+        logger.warning("%s (yf): no option expirations found — skipping.", ticker)
+        return None
+
+    expiry: str = expirations[0]
+
+    try:
+        chain = t.option_chain(expiry)
+    except Exception as exc:
+        logger.error("%s (yf): option_chain(%s) failed — %s", ticker, expiry, exc)
+        return None
+
+    calls: pd.DataFrame = chain.calls
+    puts:  pd.DataFrame = chain.puts
+
+    if calls.empty and puts.empty:
+        logger.warning("%s (yf): empty options chain for %s — skipping.", ticker, expiry)
+        return None
+
+    all_contracts = pd.concat([calls, puts], ignore_index=True)
+
+    # yfinance column names: volume, openInterest, impliedVolatility, strike
+    total_call_volume: int = int(calls["volume"].fillna(0).sum())
+    total_put_volume:  int = int(puts["volume"].fillna(0).sum())
+    total_oi:          int = int(all_contracts["openInterest"].fillna(0).sum())
+
+    volume_oi_ratio: float = (total_call_volume + total_put_volume) / max(total_oi, 1)
+    call_put_ratio:  float = total_call_volume / max(total_put_volume, 1)
+
+    # Volume-weighted average strike
+    total_volume = total_call_volume + total_put_volume
+    if total_volume > 0:
+        avg_strike = float(
+            (all_contracts["strike"] * all_contracts["volume"].fillna(0)).sum()
+            / total_volume
+        )
+    else:
+        avg_strike = 0.0
+
+    # Average IV across all contracts (proxy; zeros excluded)
+    iv_series = all_contracts["impliedVolatility"].replace(0, float("nan")).dropna()
+    iv_rank: float = float(iv_series.mean()) if not iv_series.empty else 0.0
+
+    return {
+        "ticker":         ticker,
+        "call_volume":    total_call_volume,
+        "put_volume":     total_put_volume,
+        "oi_ratio":       round(volume_oi_ratio, 4),
+        "call_put_ratio": round(call_put_ratio, 4),
+        "avg_strike":     round(avg_strike, 2),
+        "avg_expiry":     expiry,
+        "iv_rank":        round(iv_rank, 4),
+    }
+
+
+async def fetch_options_flow_yfinance() -> list[dict[str, Any]]:
+    """
+    Scan the 30-ticker watchlist for unusual options activity using yfinance.
+    No API key required.
+
+    Each ticker is fetched in a thread pool (asyncio.to_thread) to avoid
+    blocking the event loop.  Tickers are ranked by volume-to-open-interest
+    ratio and the top 10 are returned.
+
+    Returns:
+        List of up to 10 dicts, each containing:
+            ticker, call_volume, put_volume, oi_ratio, call_put_ratio,
+            avg_strike, avg_expiry, iv_rank
+    """
+    results: list[dict[str, Any]] = []
+
+    for ticker in WATCHLIST:
+        try:
+            result = await asyncio.to_thread(_fetch_ticker_flow_yf, ticker)
+        except Exception as exc:
+            logger.error("%s (yf): to_thread raised — %s", ticker, exc, exc_info=True)
+            result = None
+
+        if result is not None:
+            results.append(result)
+
+        await asyncio.sleep(RATE_LIMIT_DELAY)
+
+    results.sort(key=lambda x: x["oi_ratio"], reverse=True)
+    top_10 = results[:10]
+
+    logger.info(
+        "yfinance flow scan complete — %d/%d tickers succeeded. Top ticker: %s",
         len(results), len(WATCHLIST),
         top_10[0]["ticker"] if top_10 else "N/A",
     )
