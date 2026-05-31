@@ -25,9 +25,7 @@ class UserProfile(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
-    journal_entries: Mapped[list["JournalEntry"]] = relationship(
-        back_populates="user", foreign_keys="JournalEntry.user_id"
-    )
+    journal_entries: Mapped[list["JournalEntry"]] = relationship(back_populates="user")
 
 
 class FlowScan(Base):
@@ -75,7 +73,9 @@ class JournalEntry(Base):
     __tablename__ = "journal_entries"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("user_profiles.id"), nullable=False
+    )
     ticker: Mapped[str] = mapped_column(String, nullable=False)
     ai_summary_id: Mapped[Optional[int]] = mapped_column(
         Integer, ForeignKey("ai_summaries.id"), nullable=True
@@ -93,12 +93,7 @@ class JournalEntry(Base):
         DateTime(timezone=True), nullable=True
     )
 
-    # Not a FK — user_id is a Supabase auth UUID resolved at the application layer
-    user: Mapped["UserProfile"] = relationship(
-        back_populates="journal_entries",
-        primaryjoin="JournalEntry.user_id == foreign(UserProfile.id)",
-        viewonly=True,
-    )
+    user: Mapped["UserProfile"] = relationship(back_populates="journal_entries")
     ai_summary: Mapped[Optional["AiSummary"]] = relationship(back_populates="journal_entries")
 
 
