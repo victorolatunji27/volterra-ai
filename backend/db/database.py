@@ -1,21 +1,20 @@
 # Async SQLAlchemy engine and session factory; exposes get_db dependency for FastAPI.
 import os
 from typing import AsyncGenerator
+from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 load_dotenv()
 
-_raw_url = os.getenv("DATABASE_URL", "")
-
-# asyncpg requires the postgresql+asyncpg:// scheme; handle both bare and +asyncpg URLs
-if _raw_url.startswith("postgresql://"):
-    DATABASE_URL = _raw_url.replace("postgresql://", "postgresql+asyncpg://", 1)
-elif _raw_url.startswith("postgres://"):
-    DATABASE_URL = _raw_url.replace("postgres://", "postgresql+asyncpg://", 1)
-else:
-    DATABASE_URL = _raw_url
+# Build the connection URL at runtime so special characters in the password
+# (: and @) are percent-encoded by quote_plus rather than embedded raw.
+_password = quote_plus(os.getenv("DB_PASSWORD", ""))
+DATABASE_URL = (
+    f"postgresql+asyncpg://{os.getenv('DB_USER')}:{_password}"
+    f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
+)
 
 engine = create_async_engine(DATABASE_URL, echo=False, pool_pre_ping=True)
 
