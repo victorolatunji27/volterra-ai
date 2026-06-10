@@ -1,15 +1,27 @@
 # Scheduled job that runs the nightly options scan and dispatches the morning brief email.
 import asyncio
 import logging
+import sys
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
+# When run directly (python backend/scheduler/daily_scan.py), add backend/ to
+# sys.path BEFORE the project imports below, or they fail to resolve.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from sqlalchemy import func, select
+
+from agents.flow_analyzer import analyze_flow, store_summary, tag_strategy
+from agents.news_fetcher import synthesize_news
 from data.market_data import get_current_price, get_iv_rank
 from data.news_fetcher import fetch_news_for_ticker
 from data.options_fetcher import fetch_options_flow_yfinance
 from db.database import async_session
-from db.models import FlowScan
+from db.models import AiSummary, AlertLog, DigestLog, FlowScan, UserProfile
+from mailer.digest import build_digest_html, build_digest_subject, send_digest
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +40,36 @@ def _parse_date(value: Any) -> date | None:
         return date.fromisoformat(str(value))
     except (ValueError, TypeError):
         return None
+
+
+def validate_flow_scan(data: dict) -> bool:
+    """
+    Sanity-check one enriched flow dict before it is stored.
+
+    Requires: positive oi_ratio, non-negative integer volumes, positive
+    price_at_scan, and a non-empty ticker string.
+    """
+    if not isinstance(data, dict):
+        return False
+
+    ticker = data.get("ticker")
+    if not isinstance(ticker, str) or not ticker.strip():
+        return False
+
+    oi_ratio = data.get("oi_ratio")
+    if not isinstance(oi_ratio, (int, float)) or isinstance(oi_ratio, bool) or oi_ratio <= 0:
+        return False
+
+    for key in ("call_volume", "put_volume"):
+        value = data.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            return False
+
+    price = data.get("price_at_scan")
+    if not isinstance(price, (int, float)) or isinstance(price, bool) or price <= 0:
+        return False
+
+    return True
 
 
 async def _enrich_ticker(flow_data: dict[str, Any]) -> dict[str, Any] | None:
@@ -76,6 +118,50 @@ async def _enrich_ticker(flow_data: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+async def _create_ai_summary(scan_id: int, enriched: dict[str, Any]) -> int | None:
+    """
+    Run the AI agents for one stored flow scan and persist the result.
+
+    Pipeline: analyze_flow → synthesize_news → merge catalyst into the
+    setup_summary → tag_strategy → store_summary. Returns the new
+    ai_summaries row ID, or None when analysis failed.
+    """
+    ticker = enriched["ticker"]
+
+    analysis = await analyze_flow({
+        k: enriched.get(k)
+        for k in ("ticker", "call_volume", "put_volume", "oi_ratio",
+                  "call_put_ratio", "avg_strike", "iv_rank", "price_at_scan")
+    })
+    if analysis is None:
+        logger.warning("_create_ai_summary(%s): analyze_flow returned None.", ticker)
+        return None
+
+    news_summary = await synthesize_news(ticker, enriched.get("news") or [])
+
+    # Merge the news catalyst into the setup summary when both exist
+    catalyst_note = (news_summary or {}).get("catalyst_note")
+    if catalyst_note and analysis.get("setup_summary"):
+        analysis["setup_summary"] = f"{analysis['setup_summary']} Catalyst: {catalyst_note}"
+
+    analysis["strategy_tags"] = await tag_strategy({
+        "flow_scan_id":   scan_id,
+        "setup_summary":  analysis.get("setup_summary", ""),
+        "oi_ratio":       enriched.get("oi_ratio"),
+        "call_put_ratio": enriched.get("call_put_ratio"),
+        "iv_rank":        enriched.get("iv_rank"),
+    })
+
+    async with async_session() as session:
+        summary_id = await store_summary(scan_id, analysis, news_summary, session)
+
+    logger.info(
+        "_create_ai_summary(%s): ai_summary id=%d created (tags=%s).",
+        ticker, summary_id, analysis["strategy_tags"],
+    )
+    return summary_id
+
+
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
@@ -91,8 +177,10 @@ async def run_daily_scan() -> list[int]:
     2. For each ticker, concurrently fetch current price, IV rank, and news.
        Each ticker is wrapped in its own try/except so one failure never
        stops the rest.
-    3. Insert a FlowScan row for every successfully enriched ticker.
-    4. Return the list of inserted row IDs.
+    3. Validate and insert a FlowScan row for every successfully enriched ticker.
+    4. Run the AI agents (flow analysis, news synthesis, strategy tagging)
+       for each stored scan and persist the ai_summaries rows.
+    5. Return the list of inserted flow_scan IDs.
 
     Returns:
         List of integer primary-key IDs for every successfully inserted row.
@@ -123,10 +211,12 @@ async def run_daily_scan() -> list[int]:
         ticker = flow_data["ticker"]
         try:
             enriched = await _enrich_ticker(flow_data)
-            if enriched is not None:
-                enriched_batch.append(enriched)
-            else:
+            if enriched is None:
                 logger.warning("run_daily_scan: %s skipped (enrichment returned None).", ticker)
+            elif not validate_flow_scan(enriched):
+                logger.warning("run_daily_scan: %s skipped (failed validation): %r", ticker, enriched)
+            else:
+                enriched_batch.append(enriched)
         except Exception as exc:
             logger.error(
                 "run_daily_scan: %s enrichment raised an unhandled error — %s. Skipping.",
@@ -144,7 +234,7 @@ async def run_daily_scan() -> list[int]:
 
     # ── Step 3: persist to database ─────────────────────────────────────────
     scan_date_today = date.today()
-    inserted_ids: list[int] = []
+    inserted: list[tuple[int, dict[str, Any]]] = []
 
     async with async_session() as session:
         for enriched in enriched_batch:
@@ -170,7 +260,7 @@ async def run_daily_scan() -> list[int]:
                 )
                 session.add(scan)
                 await session.flush()           # populate autoincrement id before commit
-                inserted_ids.append(scan.id)
+                inserted.append((scan.id, enriched))
 
                 logger.info(
                     "run_daily_scan: stored %-6s | oi_ratio=%.4f | price=%s | id=%d",
@@ -195,14 +285,229 @@ async def run_daily_scan() -> list[int]:
             logger.error("run_daily_scan: final commit failed — %s", exc, exc_info=True)
             return []
 
+    # ── Step 4: AI summaries (per-ticker try/except) ────────────────────────
+    logger.info("run_daily_scan: generating AI summaries for %d scan(s)…", len(inserted))
+
+    summary_count = 0
+    for scan_id, enriched in inserted:
+        try:
+            if await _create_ai_summary(scan_id, enriched) is not None:
+                summary_count += 1
+        except Exception as exc:
+            logger.error(
+                "run_daily_scan: AI summary failed for %s (scan id=%d) — %s. Skipping.",
+                enriched["ticker"], scan_id, exc, exc_info=True,
+            )
+
     # ── Summary ─────────────────────────────────────────────────────────────
+    inserted_ids = [scan_id for scan_id, _ in inserted]
     elapsed = time.perf_counter() - scan_start
     logger.info(
-        "run_daily_scan: complete — %d/%d rows inserted in %.2fs.",
-        len(inserted_ids), len(flow_results), elapsed,
+        "run_daily_scan: complete — %d/%d rows inserted, %d AI summaries, in %.2fs.",
+        len(inserted_ids), len(flow_results), summary_count, elapsed,
     )
 
     return inserted_ids
+
+
+# ---------------------------------------------------------------------------
+# Digest email
+# ---------------------------------------------------------------------------
+
+async def _todays_scans_with_summaries(session, limit: int = 5) -> list[dict[str, Any]]:
+    """Return today's top scans (by oi_ratio) merged with their latest AI summary."""
+    scans = (
+        await session.execute(
+            select(FlowScan)
+            .where(FlowScan.scan_date == date.today())
+            .order_by(FlowScan.oi_ratio.desc())
+            .limit(limit)
+        )
+    ).scalars().all()
+
+    results: list[dict[str, Any]] = []
+    for scan in scans:
+        summary = (
+            await session.execute(
+                select(AiSummary)
+                .where(AiSummary.flow_scan_id == scan.id)
+                .order_by(AiSummary.created_at.desc())
+                .limit(1)
+            )
+        ).scalar_one_or_none()
+
+        call_put_ratio = (scan.raw_data or {}).get("call_put_ratio")
+        results.append({
+            "ticker":         scan.ticker,
+            "price_at_scan":  scan.price_at_scan,
+            "oi_ratio":       scan.oi_ratio,
+            "call_put_ratio": call_put_ratio,
+            "setup_summary":  summary.setup_summary if summary else None,
+            "risk_note":      summary.risk_note if summary else None,
+            "strategy_tags":  (summary.strategy_tags or []) if summary else [],
+        })
+    return results
+
+
+async def compose_and_send_digest() -> bool:
+    """
+    Build and send the morning-brief email to eligible users, then log it.
+
+    Eligible recipients: pro-tier users, plus free users within their first
+    30 days. Returns True when the digest was sent successfully.
+    """
+    async with async_session() as session:
+        scans = await _todays_scans_with_summaries(session, limit=5)
+        if not scans:
+            logger.warning("compose_and_send_digest: no scans for today — skipping send.")
+            return False
+
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(days=30)
+        users = (
+            await session.execute(
+                select(UserProfile).where(
+                    (UserProfile.tier == "pro") | (UserProfile.created_at > cutoff)
+                )
+            )
+        ).scalars().all()
+        recipients = [u.email for u in users if u.email]
+
+        if not recipients:
+            logger.warning("compose_and_send_digest: no eligible recipients — skipping send.")
+            return False
+
+        html = build_digest_html(scans)
+        subject = build_digest_subject()
+
+        sent = send_digest(recipients, html, subject)
+        if not sent:
+            logger.error("compose_and_send_digest: send_digest reported failure.")
+            return False
+
+        session.add(DigestLog(
+            recipient_count=len(recipients),
+            tickers_included=[s["ticker"] for s in scans],
+        ))
+        await session.commit()
+
+    logger.info(
+        "compose_and_send_digest: sent digest with %d ticker(s) to %d recipient(s).",
+        len(scans), len(recipients),
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Strategy alerts
+# ---------------------------------------------------------------------------
+
+def _build_alert_html(matches: list[dict[str, Any]]) -> str:
+    """Minimal inline-styled HTML listing the matching setups for one user."""
+    items = "".join(
+        '<tr><td style="font-family: Arial, sans-serif; font-size: 14px; color: #374151; '
+        f'padding: 10px 0;"><strong>{m["ticker"]}</strong> '
+        f'({", ".join(m["strategy_tags"])})<br>{m["setup_summary"] or ""}</td></tr>'
+        for m in matches
+    )
+    return (
+        '<table width="600" cellpadding="0" cellspacing="0" border="0" '
+        'style="max-width: 600px; background-color: #ffffff;">'
+        '<tr><td style="font-family: Arial, sans-serif; font-size: 18px; font-weight: bold; '
+        'color: #111827; padding-bottom: 8px;">VolterraAI strategy alerts</td></tr>'
+        f"{items}"
+        '<tr><td style="font-family: Arial, sans-serif; font-size: 12px; color: #9ca3af; '
+        'padding-top: 16px;">This is not financial advice.</td></tr>'
+        "</table>"
+    )
+
+
+async def check_and_send_alerts() -> int:
+    """
+    Email each user whose strategy_tags intersect with today's tagged
+    summaries, and log every alert to alert_log. Returns alerts sent.
+    """
+    async with async_session() as session:
+        users = (
+            await session.execute(
+                select(UserProfile).where(
+                    UserProfile.strategy_tags.isnot(None),
+                    func.cardinality(UserProfile.strategy_tags) > 0,
+                )
+            )
+        ).scalars().all()
+
+        if not users:
+            logger.info("check_and_send_alerts: no users with strategy tags.")
+            return 0
+
+        scans = await _todays_scans_with_summaries(session, limit=10)
+        tagged = [s for s in scans if s["strategy_tags"]]
+        if not tagged:
+            logger.info("check_and_send_alerts: no tagged summaries today.")
+            return 0
+
+        alerts_sent = 0
+        for user in users:
+            user_tags = set(user.strategy_tags or [])
+            matches = [s for s in tagged if user_tags & set(s["strategy_tags"])]
+            if not matches:
+                continue
+
+            subject = f"VolterraAI alert: {len(matches)} setups match your strategy"
+            if send_digest([user.email], _build_alert_html(matches), subject):
+                session.add(AlertLog(
+                    user_id=user.id,
+                    tickers=[m["ticker"] for m in matches],
+                ))
+                alerts_sent += 1
+            else:
+                logger.error("check_and_send_alerts: send failed for %s.", user.email)
+
+        await session.commit()
+
+    logger.info("check_and_send_alerts: %d alert(s) sent.", alerts_sent)
+    return alerts_sent
+
+
+# ---------------------------------------------------------------------------
+# Scheduler
+# ---------------------------------------------------------------------------
+
+def initialize_scheduler():
+    """
+    Start the in-process APScheduler with the weekday jobs:
+    06:30 UTC scan, 06:45 UTC digest, 07:15 UTC strategy alerts.
+
+    NOTE — Railway deployment: replace this with Railway Cron Jobs invoking
+    `python scheduler/daily_scan.py` (and a digest entry point) instead.
+    Railway Cron Jobs survive redeploys; an in-process APScheduler loses any
+    job that is mid-flight when the process restarts.
+    """
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+    from apscheduler.triggers.cron import CronTrigger
+
+    scheduler = AsyncIOScheduler(timezone="UTC")
+    scheduler.add_job(
+        run_daily_scan,
+        CronTrigger(day_of_week="mon-fri", hour=6, minute=30),
+        id="daily_scan",
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        compose_and_send_digest,
+        CronTrigger(day_of_week="mon-fri", hour=6, minute=45),
+        id="daily_digest",
+        misfire_grace_time=3600,
+    )
+    scheduler.add_job(
+        check_and_send_alerts,
+        CronTrigger(day_of_week="mon-fri", hour=7, minute=15),
+        id="strategy_alerts",
+        misfire_grace_time=3600,
+    )
+    scheduler.start()
+    logger.info("initialize_scheduler: APScheduler started with 3 weekday jobs (UTC).")
+    return scheduler
 
 
 # ---------------------------------------------------------------------------
@@ -211,12 +516,6 @@ async def run_daily_scan() -> list[int]:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import sys
-    from pathlib import Path
-
-    # Add backend/ to sys.path so sibling package imports resolve correctly
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s  %(levelname)-8s  %(name)s — %(message)s",
