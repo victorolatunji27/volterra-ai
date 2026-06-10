@@ -61,6 +61,7 @@ class AiSummary(Base):
     risk_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     news_used: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     model_version: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    strategy_tags: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -92,6 +93,9 @@ class JournalEntry(Base):
     resolved_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
 
     user: Mapped["UserProfile"] = relationship(back_populates="journal_entries")
     ai_summary: Mapped[Optional["AiSummary"]] = relationship(back_populates="journal_entries")
@@ -106,3 +110,14 @@ class DigestLog(Base):
     )
     recipient_count: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     tickers_included: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String), nullable=True)
+
+
+class AlertLog(Base):
+    __tablename__ = "alert_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    tickers: Mapped[Optional[list[str]]] = mapped_column(ARRAY(String), nullable=True)
+    sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
