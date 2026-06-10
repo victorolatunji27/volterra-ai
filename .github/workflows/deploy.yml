@@ -1,1 +1,73 @@
 # GitHub Actions workflow — runs tests and deploys the backend on pushes to main.
+#
+# - Tests run on PRs as well as main pushes so bugs are caught BEFORE they
+#   reach main (a failing PR check blocks the merge).
+# - The deploy job only runs on pushes to main (not PRs): PR code is unreviewed
+#   and must never reach production.
+# - RAILWAY_TOKEN comes from Railway dashboard → Account Settings → Tokens.
+#   Add it in GitHub → repo Settings → Secrets and variables → Actions.
+
+name: CI / Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: test_volterra
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports: ["5432:5432"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          cd backend
+          pip install -r requirements.txt
+
+      - name: Run tests
+        env:
+          DB_USER: test
+          DB_PASSWORD: test
+          DB_HOST: localhost
+          DB_PORT: "5432"
+          DB_NAME: test_volterra
+          ANTHROPIC_API_KEY: test_key_placeholder
+          NEWSAPI_KEY: test_key_placeholder
+          ENABLE_SCHEDULER: "false"
+        run: |
+          cd backend
+          python -m pytest tests/ -v
+
+  deploy-backend:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to Railway
+        run: npx @railway/cli@latest up --service backend
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
