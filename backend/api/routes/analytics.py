@@ -1,4 +1,9 @@
-# Router for journal analytics endpoints — summary stats, per-strategy breakdown, equity curve.
+# Router for journal analytics endpoints — summary stats, per-strategy/ticker breakdowns, equity curve.
+#
+# This is the single home for all analytics: the former GET /api/journal/analytics
+# combined endpoint was consolidated here. Each section is its own endpoint and
+# is cached per user in Redis (1h TTL); the cache is invalidated when a journal
+# outcome changes via invalidate_analytics_cache().
 from datetime import date
 
 from fastapi import APIRouter, Depends, Request
@@ -8,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_current_user
 from api.limiter import limiter, user_or_ip_key
+from cache import cache_delete, cache_get_json, cache_set_json
 from db.database import get_db
 from db.models import JournalEntry, UserProfile
 
@@ -15,6 +21,9 @@ router = APIRouter(tags=["analytics"])
 
 # A trade is "resolved" once it has a non-pending outcome.
 RESOLVED_OUTCOMES = ("win", "loss", "scratch")
+
+ANALYTICS_CACHE_TTL = 3600
+_CACHE_SECTIONS = ("summary", "by_strategy", "by_ticker", "equity_curve")
 
 
 # ---------------------------------------------------------------------------
@@ -42,13 +51,39 @@ class StrategyBreakdown(BaseModel):
     avg_pnl_pct: float
 
 
+class TickerBreakdown(BaseModel):
+    ticker: str
+    trade_count: int
+    win_rate: float
+
+
 class EquityPoint(BaseModel):
     date: date
     cumulative_pnl_pct: float
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Cache helpers
+# ---------------------------------------------------------------------------
+
+def _cache_key(user_id, section: str) -> str:
+    return f"analytics:{section}:{user_id}"
+
+
+async def invalidate_analytics_cache(user_id) -> None:
+    """Drop every cached analytics section for a user (call when an outcome changes)."""
+    for section in _CACHE_SECTIONS:
+        await cache_delete(_cache_key(user_id, section))
+
+
+async def _store(key: str, payload):
+    """Cache a JSON-able payload for the analytics TTL and return it."""
+    await cache_set_json(key, payload, ttl_seconds=ANALYTICS_CACHE_TTL)
+    return payload
+
+
+# ---------------------------------------------------------------------------
+# Query helpers
 # ---------------------------------------------------------------------------
 
 def _resolved_filter(user_id):
@@ -76,6 +111,11 @@ async def get_summary(
     db: AsyncSession = Depends(get_db),
 ):
     """Overall performance: totals, win rate, average P&L, and best/worst setups."""
+    key = _cache_key(user.id, "summary")
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
+
     total_trades = (
         await db.execute(
             select(func.count()).where(
@@ -99,12 +139,13 @@ async def get_summary(
     resolved = row.resolved or 0
     if not resolved:
         # No resolved trades — return a zeroed summary rather than erroring.
-        return AnalyticsSummaryResponse(
+        model = AnalyticsSummaryResponse(
             total_trades=total_trades,
             resolved_trades=0,
             win_rate=0.0,
             avg_pnl_pct=0.0,
         )
+        return await _store(key, model.model_dump(mode="json"))
 
     best_row = (
         await db.execute(
@@ -123,7 +164,7 @@ async def get_summary(
         )
     ).first()
 
-    return AnalyticsSummaryResponse(
+    model = AnalyticsSummaryResponse(
         total_trades=total_trades,
         resolved_trades=resolved,
         win_rate=_win_rate(int(row.wins or 0), resolved),
@@ -137,6 +178,7 @@ async def get_summary(
             if worst_row else None
         ),
     )
+    return await _store(key, model.model_dump(mode="json"))
 
 
 @router.get("/by-strategy", response_model=list[StrategyBreakdown])
@@ -147,6 +189,11 @@ async def get_by_strategy(
     db: AsyncSession = Depends(get_db),
 ):
     """Resolved trades grouped by strategy_type, most-traded first."""
+    key = _cache_key(user.id, "by_strategy")
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
+
     rows = (
         await db.execute(
             select(
@@ -161,15 +208,54 @@ async def get_by_strategy(
         )
     ).all()
 
-    return [
+    payload = [
         StrategyBreakdown(
             strategy_type=row.strategy_type or "untagged",
             trade_count=row.trade_count,
             win_rate=_win_rate(int(row.wins or 0), row.trade_count),
             avg_pnl_pct=round(float(row.avg_pnl), 2) if row.avg_pnl is not None else 0.0,
-        )
+        ).model_dump(mode="json")
         for row in rows
     ]
+    return await _store(key, payload)
+
+
+@router.get("/by-ticker", response_model=list[TickerBreakdown])
+@limiter.limit("30/minute", key_func=user_or_ip_key)
+async def get_by_ticker(
+    request: Request,
+    user: UserProfile = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Resolved trades grouped by ticker, top 10 by trade count."""
+    key = _cache_key(user.id, "by_ticker")
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
+
+    rows = (
+        await db.execute(
+            select(
+                JournalEntry.ticker,
+                func.count().label("trade_count"),
+                func.sum(case((JournalEntry.outcome == "win", 1), else_=0)).label("wins"),
+            )
+            .where(*_resolved_filter(user.id))
+            .group_by(JournalEntry.ticker)
+            .order_by(func.count().desc())
+            .limit(10)
+        )
+    ).all()
+
+    payload = [
+        TickerBreakdown(
+            ticker=row.ticker,
+            trade_count=row.trade_count,
+            win_rate=_win_rate(int(row.wins or 0), row.trade_count),
+        ).model_dump(mode="json")
+        for row in rows
+    ]
+    return await _store(key, payload)
 
 
 @router.get("/equity-curve", response_model=list[EquityPoint])
@@ -180,6 +266,11 @@ async def get_equity_curve(
     db: AsyncSession = Depends(get_db),
 ):
     """Cumulative P&L over time, from resolved trades ordered by resolved_at."""
+    key = _cache_key(user.id, "equity_curve")
+    cached = await cache_get_json(key)
+    if cached is not None:
+        return cached
+
     rows = (
         await db.execute(
             select(JournalEntry.resolved_at, JournalEntry.outcome_pnl_pct)
@@ -188,9 +279,13 @@ async def get_equity_curve(
         )
     ).all()
 
-    curve: list[EquityPoint] = []
+    payload = []
     running = 0.0
     for row in rows:
         running += row.outcome_pnl_pct or 0.0
-        curve.append(EquityPoint(date=row.resolved_at.date(), cumulative_pnl_pct=round(running, 2)))
-    return curve
+        payload.append(
+            EquityPoint(
+                date=row.resolved_at.date(), cumulative_pnl_pct=round(running, 2)
+            ).model_dump(mode="json")
+        )
+    return await _store(key, payload)

@@ -1,14 +1,14 @@
 # Router for trade journal endpoints — create, read, update, and delete journal entries.
 import logging
-import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from sqlalchemy import case, func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.deps import get_current_user
 from api.limiter import limiter, user_or_ip_key
+from api.routes.analytics import invalidate_analytics_cache
 from api.schemas import (
     AISummaryResponse,
     CreateJournalEntryRequest,
@@ -16,19 +16,12 @@ from api.schemas import (
     UpdateJournalNotesRequest,
     UpdateJournalOutcomeRequest,
 )
-from cache import cache_delete, cache_get_json, cache_set_json
 from db.database import get_db
 from db.models import AiSummary, JournalEntry, UserProfile
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["journal"])
-
-ANALYTICS_CACHE_TTL = 3600
-
-
-def _analytics_cache_key(user_id: uuid.UUID) -> str:
-    return f"journal_analytics:{user_id}"
 
 
 def _to_response(entry: JournalEntry, summary: AiSummary | None) -> JournalEntryResponse:
@@ -62,164 +55,6 @@ async def _summary_for(db: AsyncSession, entry: JournalEntry) -> AiSummary | Non
     return (
         await db.execute(select(AiSummary).where(AiSummary.id == entry.ai_summary_id))
     ).scalar_one_or_none()
-
-
-# ---------------------------------------------------------------------------
-# Analytics (must be registered before /{entry_id})
-# ---------------------------------------------------------------------------
-
-async def compute_journal_analytics(user_id: uuid.UUID, db: AsyncSession) -> dict:
-    """
-    Aggregate journal performance for one user using SQL aggregation
-    (never pulling all rows into Python).
-    """
-    resolved = (
-        JournalEntry.user_id == user_id,
-        JournalEntry.deleted_at.is_(None),
-        JournalEntry.outcome != "pending",
-        JournalEntry.outcome.isnot(None),
-        JournalEntry.resolved_at.isnot(None),
-    )
-
-    total_entries = (
-        await db.execute(
-            select(func.count()).where(
-                JournalEntry.user_id == user_id,
-                JournalEntry.deleted_at.is_(None),
-            )
-        )
-    ).scalar_one()
-
-    overall_row = (
-        await db.execute(
-            select(
-                func.count().label("resolved_count"),
-                func.sum(case((JournalEntry.outcome == "win", 1), else_=0)).label("wins"),
-                func.sum(case((JournalEntry.outcome == "loss", 1), else_=0)).label("losses"),
-                func.sum(case((JournalEntry.outcome == "scratch", 1), else_=0)).label("scratches"),
-                func.avg(
-                    case(
-                        (JournalEntry.outcome.in_(("win", "loss")), JournalEntry.outcome_pnl_pct),
-                    )
-                ).label("avg_pnl_pct"),
-            ).where(*resolved)
-        )
-    ).one()
-
-    resolved_count = overall_row.resolved_count or 0
-    win_count = int(overall_row.wins or 0)
-
-    overall_stats = {
-        "total_entries": total_entries,
-        "resolved_count": resolved_count,
-        "win_count": win_count,
-        "loss_count": int(overall_row.losses or 0),
-        "scratch_count": int(overall_row.scratches or 0),
-        "win_rate": round(win_count / resolved_count * 100, 1) if resolved_count else 0.0,
-        "avg_pnl_pct": (
-            round(float(overall_row.avg_pnl_pct), 2)
-            if overall_row.avg_pnl_pct is not None else None
-        ),
-    }
-
-    strategy_rows = (
-        await db.execute(
-            select(
-                JournalEntry.strategy_type,
-                func.count().label("trade_count"),
-                func.sum(case((JournalEntry.outcome == "win", 1), else_=0)).label("wins"),
-                func.avg(
-                    case(
-                        (JournalEntry.outcome.in_(("win", "loss")), JournalEntry.outcome_pnl_pct),
-                    )
-                ).label("avg_pnl_pct"),
-            )
-            .where(*resolved)
-            .group_by(JournalEntry.strategy_type)
-        )
-    ).all()
-
-    by_strategy = [
-        {
-            "strategy_type": row.strategy_type or "untagged",
-            "trade_count": row.trade_count,
-            "win_rate": round(int(row.wins or 0) / row.trade_count * 100, 1),
-            "avg_pnl_pct": (
-                round(float(row.avg_pnl_pct), 2) if row.avg_pnl_pct is not None else None
-            ),
-        }
-        for row in strategy_rows
-    ]
-
-    ticker_rows = (
-        await db.execute(
-            select(
-                JournalEntry.ticker,
-                func.count().label("trade_count"),
-                func.sum(case((JournalEntry.outcome == "win", 1), else_=0)).label("wins"),
-            )
-            .where(*resolved)
-            .group_by(JournalEntry.ticker)
-            .order_by(func.count().desc())
-            .limit(10)
-        )
-    ).all()
-
-    by_ticker = [
-        {
-            "ticker": row.ticker,
-            "trade_count": row.trade_count,
-            "win_rate": round(int(row.wins or 0) / row.trade_count * 100, 1),
-        }
-        for row in ticker_rows
-    ]
-
-    trend_rows = (
-        await db.execute(
-            select(
-                JournalEntry.resolved_at,
-                JournalEntry.outcome,
-                JournalEntry.outcome_pnl_pct,
-            )
-            .where(*resolved)
-            .order_by(JournalEntry.resolved_at.desc())
-            .limit(30)
-        )
-    ).all()
-
-    recent_trend = [
-        {
-            "resolved_at": row.resolved_at.isoformat() if row.resolved_at else None,
-            "outcome": row.outcome,
-            "outcome_pnl_pct": row.outcome_pnl_pct,
-        }
-        for row in reversed(trend_rows)
-    ]
-
-    return {
-        "overall_stats": overall_stats,
-        "by_strategy": by_strategy,
-        "by_ticker": by_ticker,
-        "recent_trend": recent_trend,
-    }
-
-
-@router.get("/analytics")
-@limiter.limit("30/minute", key_func=user_or_ip_key)
-async def get_journal_analytics(
-    request: Request,
-    user: UserProfile = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    """Aggregated performance data for the current user (cached hourly)."""
-    cache_key = _analytics_cache_key(user.id)
-    cached = await cache_get_json(cache_key)
-    if cached is not None:
-        return cached
-
-    analytics = await compute_journal_analytics(user.id, db)
-    await cache_set_json(cache_key, analytics, ttl_seconds=ANALYTICS_CACHE_TTL)
-    return analytics
 
 
 # ---------------------------------------------------------------------------
@@ -317,7 +152,7 @@ async def update_journal_outcome(
     await db.refresh(entry)
 
     # Outcomes feed the analytics aggregates — invalidate the hourly cache
-    await cache_delete(_analytics_cache_key(user.id))
+    await invalidate_analytics_cache(user.id)
 
     return _to_response(entry, await _summary_for(db, entry))
 

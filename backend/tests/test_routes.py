@@ -7,7 +7,7 @@ import os
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -79,6 +79,17 @@ class _FakeSession:
 
 def _db_returning(*results):
     return lambda: _FakeSession(results)
+
+
+@pytest.fixture
+def no_analytics_cache():
+    """Force the analytics cache to always miss and swallow writes (no network)."""
+    with patch(
+        "api.routes.analytics.cache_get_json", new=AsyncMock(return_value=None)
+    ), patch(
+        "api.routes.analytics.cache_set_json", new=AsyncMock(return_value=False)
+    ):
+        yield
 
 
 def test_health(client):
@@ -166,7 +177,7 @@ def test_analytics_summary_requires_auth(client):
     assert response.status_code == 401
 
 
-def test_analytics_summary_empty_state_is_zeroed(client):
+def test_analytics_summary_empty_state_is_zeroed(client, no_analytics_cache):
     app.dependency_overrides[get_current_user] = _fake_user
     # 1st execute: total count → 0. 2nd: resolved aggregate → resolved=0.
     app.dependency_overrides[get_db] = _db_returning(
@@ -184,7 +195,7 @@ def test_analytics_summary_empty_state_is_zeroed(client):
     }
 
 
-def test_analytics_summary_computes_stats(client):
+def test_analytics_summary_computes_stats(client, no_analytics_cache):
     app.dependency_overrides[get_current_user] = _fake_user
     app.dependency_overrides[get_db] = _db_returning(
         _FakeResult(scalar_one=4),                                             # total_trades
@@ -201,13 +212,28 @@ def test_analytics_summary_computes_stats(client):
     assert body["worst_setup"] == {"ticker": "META", "pnl_pct": -4.0}
 
 
-def test_analytics_by_strategy_empty_is_empty_list(client):
+def test_analytics_by_strategy_empty_is_empty_list(client, no_analytics_cache):
     app.dependency_overrides[get_current_user] = _fake_user
     app.dependency_overrides[get_db] = _db_returning(_FakeResult(all=[]))
     assert client.get("/api/analytics/by-strategy").json() == []
 
 
-def test_analytics_equity_curve_accumulates(client):
+def test_analytics_by_ticker_ranks_and_computes_win_rate(client, no_analytics_cache):
+    app.dependency_overrides[get_current_user] = _fake_user
+    app.dependency_overrides[get_db] = _db_returning(
+        _FakeResult(all=[
+            SimpleNamespace(ticker="NVDA", trade_count=4, wins=3),
+            SimpleNamespace(ticker="META", trade_count=2, wins=1),
+        ])
+    )
+    body = client.get("/api/analytics/by-ticker").json()
+    assert body == [
+        {"ticker": "NVDA", "trade_count": 4, "win_rate": 75.0},
+        {"ticker": "META", "trade_count": 2, "win_rate": 50.0},
+    ]
+
+
+def test_analytics_equity_curve_accumulates(client, no_analytics_cache):
     app.dependency_overrides[get_current_user] = _fake_user
     d1 = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)
     d2 = datetime(2026, 6, 3, 12, 0, tzinfo=timezone.utc)
