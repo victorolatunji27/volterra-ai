@@ -22,7 +22,8 @@ from data.news_fetcher import fetch_news_for_ticker
 from data.options_fetcher import fetch_options_flow_yfinance
 from db.database import async_session
 from db.models import AiSummary, AlertLog, DigestLog, FlowScan, UserProfile
-from mailer.digest import build_alert_html, build_digest_html, build_digest_subject, send_digest
+from mailer.alerts import build_alert_subject, build_alert_text, send_alert_email
+from mailer.digest import build_digest_html, build_digest_subject, send_digest
 
 logger = logging.getLogger(__name__)
 
@@ -442,16 +443,19 @@ async def match_alerts() -> int:
             if not matches:
                 continue
 
-            session.add(AlertLog(
-                user_id=user.id,
-                tickers=[s["ticker"] for s in matches],
-            ))
+            matched_tickers = [s["ticker"] for s in matches]
+            session.add(AlertLog(user_id=user.id, tickers=matched_tickers))
             alerts_written += 1
 
-            # Email the matched setups (best-effort — never blocks the record).
-            subject = f"VolterraAI alert: {len(matches)} setups match your strategy"
-            html = build_alert_html(matches)
-            if not send_digest([user.email], html, subject):
+            # Plain-text alert email via the Resend API (best-effort — a
+            # failed send is logged + captured to Sentry inside
+            # send_alert_email and never blocks the record or the scan).
+            sent = await send_alert_email(
+                user.email,
+                build_alert_subject(matched_tickers),
+                build_alert_text(matches),
+            )
+            if not sent:
                 logger.error("match_alerts: alert email send failed for %s.", user.email)
 
         await session.commit()

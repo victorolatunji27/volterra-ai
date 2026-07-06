@@ -123,46 +123,6 @@ def build_digest_html(scans: list[dict]) -> str:
     )
 
 
-def build_alert_html(matches: list[dict]) -> str:
-    """
-    Build the strategy-alert email body listing the setups that matched a
-    user's strategy preferences.
-
-    Each match dict follows the same shape as build_digest_html() entries
-    (ticker, price_at_scan, call_put_ratio, oi_ratio, setup_summary, risk_note),
-    so entries are rendered with the shared _scan_block(). Same HTML-email
-    constraints apply: inline CSS, table layout, 600px, Arial, pixel units.
-    """
-    today_str = date.today().strftime("%A, %B %-d, %Y")
-    entries = "".join(_scan_block(m) for m in matches)
-
-    return (
-        '<table width="100%" cellpadding="0" cellspacing="0" border="0" '
-        'style="background-color: #ffffff;"><tr><td align="center" style="padding: 24px 12px;">'
-        '<table width="600" cellpadding="0" cellspacing="0" border="0" '
-        'style="max-width: 600px; width: 100%;">'
-        # Header
-        '<tr><td style="font-family: Arial, sans-serif; font-size: 24px; font-weight: bold; '
-        'color: #111827; padding-bottom: 2px;">VolterraAI</td></tr>'
-        '<tr><td style="font-family: Arial, sans-serif; font-size: 14px; color: #6b7280; '
-        f'padding-bottom: 4px;">Strategy Alert &middot; {today_str}</td></tr>'
-        '<tr><td style="border-bottom: 2px solid #111827; font-size: 0; line-height: 0;">&nbsp;</td></tr>'
-        # Intro
-        '<tr><td style="font-family: Arial, sans-serif; font-size: 14px; color: #374151; '
-        'padding: 16px 0 4px 0;">These setups match your strategy preferences.</td></tr>'
-        # Entries
-        f"{entries}"
-        # Footer
-        '<tr><td style="font-family: Arial, sans-serif; font-size: 12px; color: #9ca3af; '
-        'padding: 24px 0 6px 0; line-height: 17px;">This is not financial advice. '
-        "VolterraAI provides analysis tools, not recommendations.</td></tr>"
-        '<tr><td style="font-family: Arial, sans-serif; font-size: 12px; color: #9ca3af;">'
-        'Manage email preferences: <a href="{preferences_link}" style="color: #6b7280;">'
-        "{preferences_link}</a></td></tr>"
-        "</table></td></tr></table>"
-    )
-
-
 def send_digest(recipients: list[str], html: str, subject: str) -> bool:
     """
     Send *html* to *recipients* via Resend. Returns True on success.

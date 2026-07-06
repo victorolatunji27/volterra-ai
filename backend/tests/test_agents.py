@@ -235,16 +235,18 @@ async def test_match_alerts_writes_row_and_sends_email():
     user = SimpleNamespace(id=uuid.uuid4(), email="a@b.com", strategy_tags=["momentum"])
     session = _FakeAlertSession([user])
     scans = [
-        {"ticker": "NVDA", "strategy_tags": ["momentum"]},
-        {"ticker": "META", "strategy_tags": ["hedge"]},
-        {"ticker": "AMD", "strategy_tags": []},   # untagged — ignored
+        {"ticker": "NVDA", "strategy_tags": ["momentum"], "oi_ratio": 4.1},
+        {"ticker": "META", "strategy_tags": ["hedge"], "oi_ratio": 2.0},
+        {"ticker": "AMD", "strategy_tags": [], "oi_ratio": 1.1},   # untagged — ignored
     ]
     with patch("scheduler.daily_scan.async_session", return_value=session), \
          patch(
              "scheduler.daily_scan._todays_scans_with_summaries",
              new=AsyncMock(return_value=scans),
          ), \
-         patch("scheduler.daily_scan.send_digest") as send_mock:
+         patch(
+             "scheduler.daily_scan.send_alert_email", new=AsyncMock(return_value=True)
+         ) as send_mock:
         written = await match_alerts()
 
     assert written == 1
@@ -254,24 +256,25 @@ async def test_match_alerts_writes_row_and_sends_email():
     assert row.user_id == user.id
     assert session.committed is True
 
-    # The matched setups are emailed to the user.
-    send_mock.assert_called_once()
-    recipients, _html, subject = send_mock.call_args.args
-    assert recipients == ["a@b.com"]
-    assert "1 setups match your strategy" in subject
+    # The matched setups are emailed as plain text to the user.
+    send_mock.assert_awaited_once()
+    to, subject, text = send_mock.await_args.args
+    assert to == "a@b.com"
+    assert subject == "VolterraAI alert — NVDA match your strategy"
+    assert "NVDA — momentum — OI ratio 4.1x" in text
 
 
 @pytest.mark.asyncio
 async def test_match_alerts_records_row_even_if_email_fails():
     user = SimpleNamespace(id=uuid.uuid4(), email="a@b.com", strategy_tags=["momentum"])
     session = _FakeAlertSession([user])
-    scans = [{"ticker": "NVDA", "strategy_tags": ["momentum"]}]
+    scans = [{"ticker": "NVDA", "strategy_tags": ["momentum"], "oi_ratio": 4.1}]
     with patch("scheduler.daily_scan.async_session", return_value=session), \
          patch(
              "scheduler.daily_scan._todays_scans_with_summaries",
              new=AsyncMock(return_value=scans),
          ), \
-         patch("scheduler.daily_scan.send_digest", return_value=False):
+         patch("scheduler.daily_scan.send_alert_email", new=AsyncMock(return_value=False)):
         written = await match_alerts()
 
     # Email failed, but the alert_log row is still recorded and committed.
@@ -290,6 +293,84 @@ async def test_match_alerts_no_users_returns_zero():
          ):
         assert await match_alerts() == 0
     assert session.added == []
+
+
+# ---------------------------------------------------------------------------
+# send_alert_email / build_alert_text
+# ---------------------------------------------------------------------------
+
+def _mock_async_client(response):
+    """AsyncClient context-manager mock whose post() returns *response*."""
+    client = MagicMock()
+    client.post = AsyncMock(return_value=response)
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(return_value=client)
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    return ctx, client
+
+
+def test_build_alert_text_lists_tickers_tags_and_oi():
+    from mailer.alerts import build_alert_text
+    text = build_alert_text([
+        {"ticker": "NVDA", "strategy_tags": ["momentum", "breakout"], "oi_ratio": 4.1},
+        {"ticker": "SPY", "strategy_tags": [], "oi_ratio": None},
+    ])
+    assert "- NVDA — momentum, breakout — OI ratio 4.1x" in text
+    assert "- SPY — untagged — OI ratio n/a" in text
+    assert "<" not in text  # plain text, no HTML
+    assert "Not financial advice" in text
+
+
+@pytest.mark.asyncio
+async def test_send_alert_email_posts_to_resend():
+    import mailer.alerts as alerts
+    ctx, client = _mock_async_client(SimpleNamespace(status_code=200, text="{}"))
+    with patch.object(alerts, "RESEND_API_KEY", "re_test"), \
+         patch.object(alerts.httpx, "AsyncClient", return_value=ctx):
+        ok = await alerts.send_alert_email("a@b.com", "subj", "body")
+
+    assert ok is True
+    kwargs = client.post.await_args.kwargs
+    assert client.post.await_args.args[0] == "https://api.resend.com/emails"
+    assert kwargs["headers"]["Authorization"] == "Bearer re_test"
+    assert kwargs["json"]["to"] == ["a@b.com"]
+    assert kwargs["json"]["text"] == "body"
+    assert "html" not in kwargs["json"]
+
+
+@pytest.mark.asyncio
+async def test_send_alert_email_error_goes_to_sentry_and_returns_false():
+    import mailer.alerts as alerts
+    ctx, _ = _mock_async_client(SimpleNamespace(status_code=422, text="invalid from"))
+    with patch.object(alerts, "RESEND_API_KEY", "re_test"), \
+         patch.object(alerts.httpx, "AsyncClient", return_value=ctx), \
+         patch.object(alerts.sentry_sdk, "capture_message") as capture:
+        ok = await alerts.send_alert_email("a@b.com", "subj", "body")
+
+    assert ok is False
+    capture.assert_called_once()          # Resend error is reported to Sentry
+
+
+@pytest.mark.asyncio
+async def test_send_alert_email_network_failure_captured_not_raised():
+    import mailer.alerts as alerts
+    ctx = MagicMock()
+    ctx.__aenter__ = AsyncMock(side_effect=RuntimeError("boom"))
+    ctx.__aexit__ = AsyncMock(return_value=False)
+    with patch.object(alerts, "RESEND_API_KEY", "re_test"), \
+         patch.object(alerts.httpx, "AsyncClient", return_value=ctx), \
+         patch.object(alerts.sentry_sdk, "capture_exception") as capture:
+        ok = await alerts.send_alert_email("a@b.com", "subj", "body")
+
+    assert ok is False                    # never raises into the scan
+    capture.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_send_alert_email_without_key_returns_false():
+    import mailer.alerts as alerts
+    with patch.object(alerts, "RESEND_API_KEY", ""):
+        assert await alerts.send_alert_email("a@b.com", "subj", "body") is False
 
 
 # ---------------------------------------------------------------------------
