@@ -54,10 +54,12 @@ async def _get_owned_entry(
 async def _get_entry_for_write(
     db: AsyncSession, entry_id: int, user: UserProfile
 ) -> JournalEntry:
-    """Load a non-deleted entry for mutation.
+    """Load a non-deleted entry for mutation, or raise 404.
 
-    Raises 404 if it does not exist (or is already deleted), and 403 if it
-    exists but belongs to another user.
+    A row that exists but belongs to another user is reported as 404 with the
+    same detail as a missing row, so a caller cannot enumerate which entry ids
+    exist. Ownership is still checked explicitly here rather than filtered in
+    SQL, so this enforcement stays directly testable.
     """
     entry = (
         await db.execute(
@@ -67,10 +69,8 @@ async def _get_entry_for_write(
             )
         )
     ).scalar_one_or_none()
-    if entry is None:
+    if entry is None or entry.user_id != user.id:
         raise HTTPException(status_code=404, detail="Journal entry not found")
-    if entry.user_id != user.id:
-        raise HTTPException(status_code=403, detail="Not your journal entry")
     return entry
 
 
@@ -166,7 +166,7 @@ async def update_journal_entry(
     user: UserProfile = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Partially update a journal entry the current user owns (403 if not).
+    """Partially update a journal entry the current user owns (404 if not).
 
     Only the fields present in the request are changed. When ``outcome`` moves
     off ``pending``, ``resolved_at`` is stamped with the current time; moving
@@ -201,7 +201,7 @@ async def delete_journal_entry(
     user: UserProfile = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Soft-delete an entry the current user owns (403 if not) by stamping deleted_at."""
+    """Soft-delete an entry the current user owns (404 if not) by stamping deleted_at."""
     entry = await _get_entry_for_write(db, entry_id, user)
     entry.deleted_at = datetime.now(tz=timezone.utc)
     await db.flush()

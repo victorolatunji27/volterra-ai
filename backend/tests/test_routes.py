@@ -219,13 +219,15 @@ def test_update_journal_entry_resolves_on_outcome(client):
     inval.assert_awaited_once()            # analytics cache busted
 
 
-def test_update_journal_entry_not_owned_returns_403(client):
+def test_update_journal_entry_not_owned_returns_404(client):
+    # Another user's row is reported as 404 (same as missing) — non-enumerable.
     user = _fake_user()
     other = _fake_journal_entry(uuid.uuid4())  # belongs to someone else
     app.dependency_overrides[get_current_user] = lambda: user
     app.dependency_overrides[get_db] = _db_returning(_FakeResult(scalar_one_or_none=other))
     response = client.patch("/api/journal/1", json={"user_notes": "x"})
-    assert response.status_code == 403
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Journal entry not found"
 
 
 def test_update_journal_entry_missing_returns_404(client):
@@ -246,13 +248,15 @@ def test_delete_journal_entry_soft_deletes(client):
     assert entry.deleted_at is not None     # soft delete, not removed
 
 
-def test_delete_journal_entry_not_owned_returns_403(client):
+def test_delete_journal_entry_not_owned_returns_404(client):
+    # Another user's row is reported as 404 (same as missing) — non-enumerable.
     user = _fake_user()
     other = _fake_journal_entry(uuid.uuid4())
     app.dependency_overrides[get_current_user] = lambda: user
     app.dependency_overrides[get_db] = _db_returning(_FakeResult(scalar_one_or_none=other))
     response = client.delete("/api/journal/1")
-    assert response.status_code == 403
+    assert response.status_code == 404
+    assert response.json()["detail"] == "Journal entry not found"
 
 
 def test_scans_invalid_ticker_returns_400(client):
