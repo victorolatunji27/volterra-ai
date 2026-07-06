@@ -314,6 +314,7 @@ def _trade_row(ticker="NVDA", strat="momentum", outcome="win", pnl=10.0):
 
 def _no_review_cache():
     return (
+        patch("agents.journal_agent.cache_configured", return_value=True),
         patch("agents.journal_agent.cache_get_json", new=AsyncMock(return_value=None)),
         patch("agents.journal_agent.cache_set_json", new=AsyncMock(return_value=True)),
     )
@@ -321,13 +322,15 @@ def _no_review_cache():
 
 @pytest.mark.asyncio
 async def test_weekly_review_skips_claude_under_three_trades():
-    get_p, set_p = _no_review_cache()
+    conf_p, get_p, set_p = _no_review_cache()
     db = _FakeReviewDB([_trade_row(), _trade_row(outcome="loss", pnl=-4.0)])  # only 2
-    with get_p, set_p, patch("agents.journal_agent._call_claude") as claude:
+    with conf_p, get_p, set_p as set_mock, patch("agents.journal_agent._call_claude") as claude:
         result = await generate_weekly_review(uuid.uuid4(), db)  # type: ignore[arg-type]
 
     assert result == EMPTY_REVIEW
     claude.assert_not_called()
+    # The empty result is negative-cached briefly so page views can't hammer the DB
+    assert set_mock.await_args.kwargs["ttl_seconds"] == 3600
 
 
 @pytest.mark.asyncio
@@ -337,9 +340,9 @@ async def test_weekly_review_generates_and_caches():
         "bullets": ["a", "b", "c"],
         "generated_at": "2026-07-06",
     }
-    get_p, set_p = _no_review_cache()
+    conf_p, get_p, set_p = _no_review_cache()
     db = _FakeReviewDB([_trade_row(), _trade_row(), _trade_row(outcome="loss", pnl=-3.0)])
-    with get_p, set_p as set_mock, patch(
+    with conf_p, get_p, set_p as set_mock, patch(
         "agents.journal_agent._call_claude",
         new=AsyncMock(return_value=(json.dumps(review), 200, 100)),
     ) as claude:
@@ -356,10 +359,40 @@ async def test_weekly_review_generates_and_caches():
 @pytest.mark.asyncio
 async def test_weekly_review_returns_cached_without_db_or_claude():
     cached = {"headline": "Cached.", "bullets": [], "generated_at": "2026-07-05"}
-    with patch(
+    with patch("agents.journal_agent.cache_configured", return_value=True), patch(
         "agents.journal_agent.cache_get_json", new=AsyncMock(return_value=cached)
     ), patch("agents.journal_agent._call_claude") as claude:
         result = await generate_weekly_review(uuid.uuid4(), None)  # type: ignore[arg-type]
 
     assert result == cached
     claude.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_weekly_review_refuses_claude_when_cache_unavailable():
+    # No cache means no dedupe — every request would be a paid generation, so
+    # the agent must not call Claude (or even the DB) at all.
+    with patch("agents.journal_agent.cache_configured", return_value=False), patch(
+        "agents.journal_agent._call_claude"
+    ) as claude:
+        result = await generate_weekly_review(uuid.uuid4(), None)  # type: ignore[arg-type]
+
+    assert result == EMPTY_REVIEW
+    claude.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_weekly_review_negative_caches_parse_failure():
+    conf_p, get_p, set_p = _no_review_cache()
+    db = _FakeReviewDB([_trade_row(), _trade_row(), _trade_row()])
+    with conf_p, get_p, set_p as set_mock, patch(
+        "agents.journal_agent._call_claude",
+        new=AsyncMock(return_value=("this is not json", 200, 100)),
+    ) as claude:
+        result = await generate_weekly_review(uuid.uuid4(), db)  # type: ignore[arg-type]
+
+    assert result == EMPTY_REVIEW
+    claude.assert_awaited_once()  # exactly one paid attempt
+    # Failure cached with the short TTL — retries are bounded to ~hourly
+    set_mock.assert_awaited_once()
+    assert set_mock.await_args.kwargs["ttl_seconds"] == 3600

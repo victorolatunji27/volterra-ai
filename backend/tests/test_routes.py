@@ -405,7 +405,9 @@ def test_weekly_review_empty_under_three_trades(client):
     app.dependency_overrides[get_db] = _db_returning(
         _FakeResult(all=[])  # no resolved trades this week
     )
-    with patch("agents.journal_agent.cache_get_json", new=AsyncMock(return_value=None)):
+    with patch("agents.journal_agent.cache_configured", return_value=True), patch(
+        "agents.journal_agent.cache_get_json", new=AsyncMock(return_value=None)
+    ), patch("agents.journal_agent.cache_set_json", new=AsyncMock(return_value=True)):
         body = client.get("/api/analytics/weekly-review").json()
     assert body == {"headline": None, "bullets": [], "generated_at": None}
 

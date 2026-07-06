@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from agents.flow_analyzer import _call_claude, _parse_json_block
-from cache import cache_get_json, cache_set_json
+from cache import cache_configured, cache_get_json, cache_set_json
 from db.models import JournalEntry
 
 load_dotenv()
@@ -18,7 +18,11 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 REVIEW_MODEL = "claude-sonnet-4-6"
-REVIEW_CACHE_TTL = 604800  # 7 days
+REVIEW_CACHE_TTL = 604800  # 7 days — a successful review is final for the week
+# Empty/failed results are negative-cached briefly: enough to stop a
+# per-request retry storm, short enough to retry within the hour (a thin week
+# can also cross the 3-trade threshold mid-week).
+EMPTY_REVIEW_TTL = 3600
 MIN_RESOLVED_TRADES = 3
 
 RESOLVED_OUTCOMES = ("win", "loss", "scratch")
@@ -54,7 +58,20 @@ async def generate_weekly_review(user_id: UUID, db: AsyncSession) -> dict:
     user has fewer than MIN_RESOLVED_TRADES resolved trades this week —
     Claude is never called in that case — or when the model response cannot
     be parsed.
+
+    Token protection: empty/failed results are negative-cached for
+    EMPTY_REVIEW_TTL so repeated page views cannot retry Claude more than
+    ~hourly, and if the cache itself is unavailable Claude is never called
+    (without a cache every request would be a fresh paid generation).
     """
+    if not cache_configured():
+        logger.warning(
+            "generate_weekly_review(%s): cache unavailable — refusing to call "
+            "Claude without dedupe. Returning empty review.",
+            user_id,
+        )
+        return dict(EMPTY_REVIEW)
+
     cache_key = f"weekly_review:{user_id}:{_iso_week()}"
     cached = await cache_get_json(cache_key)
     if isinstance(cached, dict):
@@ -83,6 +100,7 @@ async def generate_weekly_review(user_id: UUID, db: AsyncSession) -> dict:
             "generate_weekly_review(%s): only %d resolved trade(s) this week — skipping Claude.",
             user_id, len(rows),
         )
+        await cache_set_json(cache_key, dict(EMPTY_REVIEW), ttl_seconds=EMPTY_REVIEW_TTL)
         return dict(EMPTY_REVIEW)
 
     trades = [
@@ -110,6 +128,7 @@ async def generate_weekly_review(user_id: UUID, db: AsyncSession) -> dict:
         logger.error(
             "generate_weekly_review(%s): Claude call failed — %s", user_id, exc, exc_info=True
         )
+        await cache_set_json(cache_key, dict(EMPTY_REVIEW), ttl_seconds=EMPTY_REVIEW_TTL)
         return dict(EMPTY_REVIEW)
 
     result = _parse_json_block(raw)
@@ -117,6 +136,7 @@ async def generate_weekly_review(user_id: UUID, db: AsyncSession) -> dict:
         logger.error(
             "generate_weekly_review(%s): invalid JSON response: %r", user_id, raw[:300]
         )
+        await cache_set_json(cache_key, dict(EMPTY_REVIEW), ttl_seconds=EMPTY_REVIEW_TTL)
         return dict(EMPTY_REVIEW)
 
     await cache_set_json(cache_key, result, ttl_seconds=REVIEW_CACHE_TTL)
