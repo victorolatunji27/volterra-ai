@@ -238,6 +238,21 @@ export default function TickerPage() {
 
   useEffect(() => {
     let alive = true;
+    // Demo mode: the landing page's "View demo setup" stashes the payload
+    // from GET /api/demo/setup and links here with ?demo=1 — render exactly
+    // that instead of fetching live ticker data.
+    if (new URLSearchParams(window.location.search).get("demo") === "1") {
+      try {
+        const raw = sessionStorage.getItem("volterra-demo-setup");
+        if (raw) {
+          const d = JSON.parse(raw) as { setup: TickerDetail["setup"]; aiBlocks: TickerDetail["aiBlocks"] };
+          setDetail({ demo: true, setup: d.setup, series: DEMO_TICKER_SERIES, aiBlocks: d.aiBlocks, history: null });
+          return;
+        }
+      } catch {
+        /* corrupt/missing stash — fall through to the normal fetch */
+      }
+    }
     fetchTicker(symbol).then((d) => { if (alive) setDetail(d); });
     return () => { alive = false; };
   }, [symbol]);

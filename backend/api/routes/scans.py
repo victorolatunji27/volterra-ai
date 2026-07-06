@@ -134,7 +134,20 @@ class DemoSetupResponse(BaseModel):
     risk_note: str
 
 
-# Built once at import; every request returns the same constant.
+def _next_june_21() -> str:
+    """The next occurrence of June 21 (ISO date).
+
+    The demo card's copy references a 'Jun 21' expiry, so the date stays
+    hardcoded to that day — but rolls forward each year so the illustrative
+    setup never looks expired.
+    """
+    today = date.today()
+    year = today.year if today <= date(today.year, 6, 21) else today.year + 1
+    return date(year, 6, 21).isoformat()
+
+
+# Built once at import; every request returns this constant with only the
+# expiry recomputed.
 _DEMO_SETUP = DemoSetupResponse(
     is_demo=True,
     ticker="NVDA",
@@ -146,7 +159,7 @@ _DEMO_SETUP = DemoSetupResponse(
     price_at_scan=172.40,
     price_change_pct=2.4,
     avg_strike=180.0,
-    expiry="2025-06-21",
+    expiry="2025-06-21",  # placeholder — replaced per request by _next_june_21()
     setup_summary=(
         "Heavy call buying concentrated in near-dated $180 strikes ahead of the "
         "GTC keynote. Volume is running 4x open interest, suggesting fresh "
@@ -166,4 +179,4 @@ _DEMO_SETUP = DemoSetupResponse(
 @limiter.limit("60/minute")
 async def demo_setup(request: Request):
     """Static illustrative setup for the landing page. Public — no auth, no DB."""
-    return _DEMO_SETUP
+    return _DEMO_SETUP.model_copy(update={"expiry": _next_june_21()})

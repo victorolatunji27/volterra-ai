@@ -7,6 +7,7 @@ import { Spark } from "@/components/charts";
 import { ICONS, svgIcon, playIcon } from "@/components/icons";
 import { useWidth } from "@/lib/useWidth";
 import { TAGS } from "@/lib/tags";
+import { fetchDemoSetup } from "@/lib/api";
 
 const mono = "var(--mono)";
 
@@ -114,7 +115,18 @@ export default function Landing() {
   const w = useWidth();
   const narrow = w < 900;
   const startTrial = () => router.push("/auth?mode=signup");
-  const viewDemo = () => router.push("/ticker/NVDA");
+  const viewDemo = async () => {
+    // Fetch the server's illustrative setup (public endpoint; local demo
+    // fallback when the API is down), stash it, and open the ticker page in
+    // demo mode so it renders exactly this payload.
+    const demo = await fetchDemoSetup();
+    try {
+      sessionStorage.setItem("volterra-demo-setup", JSON.stringify(demo));
+    } catch {
+      /* sessionStorage unavailable — ticker page falls back on its own */
+    }
+    router.push(`/ticker/${demo.setup.t}?demo=1`);
+  };
 
   return (
     <div style={{ maxWidth: 1280, margin: "0 auto", padding: "0 28px" }}>

@@ -13,8 +13,9 @@ var/
 sdist/
 develop-eggs/
 .installed.cfg
-lib/
-lib64/
+# Root-anchored: Python build/venv lib dirs only — frontend/lib is real source
+/lib/
+/lib64/
 .eggs/
 .pytest_cache/
 .mypy_cache/

@@ -139,7 +139,14 @@ def test_demo_setup_is_public_and_static(client):
     # frontend renders without branching.
     response = client.get("/api/demo/setup")
     assert response.status_code == 200
-    assert response.json() == {
+    body = response.json()
+
+    # expiry rolls forward to the next June 21 so the card never looks expired
+    today = date.today()
+    expected_year = today.year if today <= date(today.year, 6, 21) else today.year + 1
+    assert body.pop("expiry") == f"{expected_year}-06-21"
+
+    assert body == {
         "is_demo": True,
         "ticker": "NVDA",
         "company_name": "NVIDIA Corp.",
@@ -150,7 +157,6 @@ def test_demo_setup_is_public_and_static(client):
         "price_at_scan": 172.40,
         "price_change_pct": 2.4,
         "avg_strike": 180.0,
-        "expiry": "2025-06-21",
         "setup_summary": (
             "Heavy call buying concentrated in near-dated $180 strikes ahead of the "
             "GTC keynote. Volume is running 4x open interest, suggesting fresh "
