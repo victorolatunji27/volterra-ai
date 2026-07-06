@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 from cache import cache_get_json, cache_set_json
 from db.models import AiSummary
+from strategies import STRATEGY_TAGS
 
 load_dotenv()
 
@@ -56,9 +57,8 @@ Input: {"ticker": "AMD", "call_volume": 28000, "put_volume": 29500, "oi_ratio": 
         "call_put_ratio": 0.95, "avg_strike": 162, "iv_rank": 22, "price_at_scan": 161}
 Output: {"setup_summary": "AMD shows near-equal call and put volume with a volume-to-OI ratio of only 1.1x — barely above normal activity. IV rank at 22 indicates options are cheap relative to historical ranges, which may favor buyers of premium if a move develops. There is no clear directional signal in the current flow.", "flow_interpretation": "Call and put volumes are roughly equal. No unusual directional skew. Low OI ratio suggests this is routine activity, not unusual positioning.", "risk_note": "No clear signal means any trade here is speculative. Low IV is attractive for buyers but meaningless without a thesis."}"""
 
-STRATEGY_TAGS = [
-    "momentum", "earnings_play", "iv_crush", "breakout", "hedge", "contrarian", "neutral",
-]
+# STRATEGY_TAGS is imported from strategies.py (single source of truth) and stays
+# importable as agents.flow_analyzer.STRATEGY_TAGS for existing callers.
 
 TAGGER_SYSTEM_PROMPT = """You are a strategy classifier for options trade setups.
 Given a setup summary and flow data, assign 1-2 strategy tags from this exact list:

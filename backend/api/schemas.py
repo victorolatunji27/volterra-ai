@@ -6,13 +6,14 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from strategies import STRATEGY_TAG_SET
+
 TICKER_PATTERN = re.compile(r"^[A-Z]{1,5}$")
 
 ALLOWED_OUTCOMES = {"win", "loss", "scratch", "pending"}
 
-ALLOWED_STRATEGY_TAGS = {
-    "momentum", "earnings_play", "iv_crush", "breakout", "hedge", "contrarian", "neutral",
-}
+# Shared taxonomy — see strategies.py (single source of truth).
+ALLOWED_STRATEGY_TAGS = STRATEGY_TAG_SET
 
 
 # ---------------------------------------------------------------------------

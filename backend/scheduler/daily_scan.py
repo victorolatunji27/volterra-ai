@@ -401,30 +401,16 @@ async def compose_and_send_digest() -> bool:
 # Strategy alerts
 # ---------------------------------------------------------------------------
 
-def _build_alert_html(matches: list[dict[str, Any]]) -> str:
-    """Minimal inline-styled HTML listing the matching setups for one user."""
-    items = "".join(
-        '<tr><td style="font-family: Arial, sans-serif; font-size: 14px; color: #374151; '
-        f'padding: 10px 0;"><strong>{m["ticker"]}</strong> '
-        f'({", ".join(m["strategy_tags"])})<br>{m["setup_summary"] or ""}</td></tr>'
-        for m in matches
-    )
-    return (
-        '<table width="600" cellpadding="0" cellspacing="0" border="0" '
-        'style="max-width: 600px; background-color: #ffffff;">'
-        '<tr><td style="font-family: Arial, sans-serif; font-size: 18px; font-weight: bold; '
-        'color: #111827; padding-bottom: 8px;">VolterraAI strategy alerts</td></tr>'
-        f"{items}"
-        '<tr><td style="font-family: Arial, sans-serif; font-size: 12px; color: #9ca3af; '
-        'padding-top: 16px;">This is not financial advice.</td></tr>'
-        "</table>"
-    )
-
-
-async def check_and_send_alerts() -> int:
+async def match_alerts() -> int:
     """
-    Email each user whose strategy_tags intersect with today's tagged
-    summaries, and log every alert to alert_log. Returns alerts sent.
+    Record strategy-match alerts for the day.
+
+    For every user with non-empty strategy_tags, find today's scans whose AI
+    summary strategy_tags intersect the user's tags and write a single
+    alert_log row per matched user listing the matched tickers.
+
+    Email delivery is intentionally deferred — this only records the matches.
+    Returns the number of alert_log rows written.
     """
     async with async_session() as session:
         users = (
@@ -437,36 +423,35 @@ async def check_and_send_alerts() -> int:
         ).scalars().all()
 
         if not users:
-            logger.info("check_and_send_alerts: no users with strategy tags.")
+            logger.info("match_alerts: no users with strategy tags.")
             return 0
 
         scans = await _todays_scans_with_summaries(session, limit=10)
         tagged = [s for s in scans if s["strategy_tags"]]
         if not tagged:
-            logger.info("check_and_send_alerts: no tagged summaries today.")
+            logger.info("match_alerts: no tagged summaries today.")
             return 0
 
-        alerts_sent = 0
+        alerts_written = 0
         for user in users:
             user_tags = set(user.strategy_tags or [])
-            matches = [s for s in tagged if user_tags & set(s["strategy_tags"])]
-            if not matches:
+            matched_tickers = [
+                s["ticker"] for s in tagged if user_tags & set(s["strategy_tags"])
+            ]
+            if not matched_tickers:
                 continue
 
-            subject = f"VolterraAI alert: {len(matches)} setups match your strategy"
-            if send_digest([user.email], _build_alert_html(matches), subject):
-                session.add(AlertLog(
-                    user_id=user.id,
-                    tickers=[m["ticker"] for m in matches],
-                ))
-                alerts_sent += 1
-            else:
-                logger.error("check_and_send_alerts: send failed for %s.", user.email)
+            session.add(AlertLog(user_id=user.id, tickers=matched_tickers))
+            alerts_written += 1
+
+            # TODO(alert-email): send the matched setups to user.email here once
+            # email alerts are enabled — e.g. build the HTML and call send_digest().
+            # Deliberately not sending email yet.
 
         await session.commit()
 
-    logger.info("check_and_send_alerts: %d alert(s) sent.", alerts_sent)
-    return alerts_sent
+    logger.info("match_alerts: wrote %d alert_log row(s).", alerts_written)
+    return alerts_written
 
 
 # ---------------------------------------------------------------------------
@@ -500,9 +485,9 @@ def initialize_scheduler():
         misfire_grace_time=3600,
     )
     scheduler.add_job(
-        check_and_send_alerts,
+        match_alerts,
         CronTrigger(day_of_week="mon-fri", hour=7, minute=15),
-        id="strategy_alerts",
+        id="match_alerts",
         misfire_grace_time=3600,
     )
     scheduler.start()

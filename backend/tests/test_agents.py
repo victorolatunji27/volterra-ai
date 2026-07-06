@@ -3,6 +3,8 @@
 # No real API calls are made: the Anthropic SDK is mocked with unittest.mock,
 # and the Upstash cache helpers are patched to behave as a permanent miss.
 import json
+import uuid
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,7 +12,7 @@ import pytest
 from agents.flow_analyzer import analyze_flow
 from data.market_data import get_price_history
 from data.news_fetcher import format_news_for_prompt
-from scheduler.daily_scan import validate_flow_scan
+from scheduler.daily_scan import match_alerts, validate_flow_scan
 
 VALID_FLOW = {
     "ticker": "NVDA", "call_volume": 45000, "put_volume": 8000,
@@ -197,3 +199,69 @@ async def test_get_price_history_returns_none_on_failure():
         result = await get_price_history("NVDA")
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# match_alerts
+# ---------------------------------------------------------------------------
+
+class _FakeAlertSession:
+    """Async-context session stub for match_alerts: canned users, records adds."""
+
+    def __init__(self, users):
+        self._users = users
+        self.added = []
+        self.committed = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return False
+
+    async def execute(self, *args, **kwargs):
+        return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: self._users))
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    async def commit(self):
+        self.committed = True
+
+
+@pytest.mark.asyncio
+async def test_match_alerts_writes_one_row_per_matched_user_without_email():
+    user = SimpleNamespace(id=uuid.uuid4(), email="a@b.com", strategy_tags=["momentum"])
+    session = _FakeAlertSession([user])
+    scans = [
+        {"ticker": "NVDA", "strategy_tags": ["momentum"]},
+        {"ticker": "META", "strategy_tags": ["hedge"]},
+        {"ticker": "AMD", "strategy_tags": []},   # untagged — ignored
+    ]
+    with patch("scheduler.daily_scan.async_session", return_value=session), \
+         patch(
+             "scheduler.daily_scan._todays_scans_with_summaries",
+             new=AsyncMock(return_value=scans),
+         ), \
+         patch("scheduler.daily_scan.send_digest") as send_mock:
+        written = await match_alerts()
+
+    assert written == 1
+    assert len(session.added) == 1
+    row = session.added[0]
+    assert row.tickers == ["NVDA"]            # only the momentum match
+    assert row.user_id == user.id
+    assert session.committed is True
+    send_mock.assert_not_called()             # email intentionally deferred
+
+
+@pytest.mark.asyncio
+async def test_match_alerts_no_users_returns_zero():
+    session = _FakeAlertSession([])
+    with patch("scheduler.daily_scan.async_session", return_value=session), \
+         patch(
+             "scheduler.daily_scan._todays_scans_with_summaries",
+             new=AsyncMock(return_value=[]),
+         ):
+        assert await match_alerts() == 0
+    assert session.added == []

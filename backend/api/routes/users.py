@@ -30,7 +30,7 @@ async def get_me(request: Request, user: UserProfile = Depends(get_current_user)
     return user
 
 
-@router.patch("/me/strategies", response_model=UserProfileResponse)
+@router.patch("/me/strategies", response_model=list[str])
 @limiter.limit("30/minute", key_func=user_or_ip_key)
 async def update_my_strategies(
     request: Request,
@@ -38,10 +38,14 @@ async def update_my_strategies(
     user: UserProfile = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Overwrite the current user's strategy tags and return the updated list.
+
+    Tags are validated against the shared allowed set by UpdateStrategyTagsRequest.
+    """
     user.strategy_tags = body.strategy_tags
     await db.flush()
     await db.refresh(user)
-    return user
+    return user.strategy_tags
 
 
 @router.post("/me/test-alert")

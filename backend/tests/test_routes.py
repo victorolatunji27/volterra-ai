@@ -96,6 +96,16 @@ def _db_returning(*results):
     return lambda: _FakeSession(results)
 
 
+class _WriteDB:
+    """Minimal async session for write endpoints that only flush/refresh."""
+
+    async def flush(self):
+        pass
+
+    async def refresh(self, obj):
+        pass
+
+
 @pytest.fixture
 def no_analytics_cache():
     """Force the analytics cache to always miss and swallow writes (no network)."""
@@ -181,6 +191,40 @@ def test_update_strategies_rejects_invalid_tags(authed_client):
         "/api/users/me/strategies", json={"strategy_tags": ["momentum", "bogus"]}
     )
     assert response.status_code == 422
+
+
+def test_update_strategies_success_returns_updated_list(client):
+    app.dependency_overrides[get_current_user] = _fake_user
+    app.dependency_overrides[get_db] = lambda: _WriteDB()
+    response = client.patch(
+        "/api/users/me/strategies", json={"strategy_tags": ["momentum", "hedge"]}
+    )
+    assert response.status_code == 200
+    assert response.json() == ["momentum", "hedge"]
+
+
+# ---------------------------------------------------------------------------
+# Alerts route
+# ---------------------------------------------------------------------------
+
+def test_alerts_requires_auth(client):
+    assert client.get("/api/alerts").status_code == 401
+
+
+def test_alerts_returns_user_rows_newest_first(client):
+    app.dependency_overrides[get_current_user] = _fake_user
+    newer = datetime(2026, 6, 10, 7, 15, tzinfo=timezone.utc)
+    older = datetime(2026, 6, 9, 7, 15, tzinfo=timezone.utc)
+    app.dependency_overrides[get_db] = _db_returning(
+        _FakeResult(all=[
+            SimpleNamespace(id=2, tickers=["NVDA", "META"], sent_at=newer, user_id=uuid.uuid4()),
+            SimpleNamespace(id=1, tickers=["AMD"], sent_at=older, user_id=uuid.uuid4()),
+        ])
+    )
+    body = client.get("/api/alerts").json()
+    assert [row["id"] for row in body] == [2, 1]
+    assert body[0]["tickers"] == ["NVDA", "META"]
+    assert body[0]["sent_at"].startswith("2026-06-10")
 
 
 # ---------------------------------------------------------------------------
