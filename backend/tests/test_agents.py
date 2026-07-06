@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agents.flow_analyzer import analyze_flow
+from agents.journal_agent import EMPTY_REVIEW, generate_weekly_review
 from data.market_data import get_price_history
 from data.news_fetcher import format_news_for_prompt
 from scheduler.daily_scan import match_alerts, validate_flow_scan
@@ -289,3 +290,76 @@ async def test_match_alerts_no_users_returns_zero():
          ):
         assert await match_alerts() == 0
     assert session.added == []
+
+
+# ---------------------------------------------------------------------------
+# generate_weekly_review
+# ---------------------------------------------------------------------------
+
+class _FakeReviewDB:
+    """Async session stub returning canned journal rows from execute()."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    async def execute(self, *args, **kwargs):
+        return SimpleNamespace(all=lambda: self._rows)
+
+
+def _trade_row(ticker="NVDA", strat="momentum", outcome="win", pnl=10.0):
+    return SimpleNamespace(
+        ticker=ticker, strategy_type=strat, outcome=outcome, outcome_pnl_pct=pnl
+    )
+
+
+def _no_review_cache():
+    return (
+        patch("agents.journal_agent.cache_get_json", new=AsyncMock(return_value=None)),
+        patch("agents.journal_agent.cache_set_json", new=AsyncMock(return_value=True)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_weekly_review_skips_claude_under_three_trades():
+    get_p, set_p = _no_review_cache()
+    db = _FakeReviewDB([_trade_row(), _trade_row(outcome="loss", pnl=-4.0)])  # only 2
+    with get_p, set_p, patch("agents.journal_agent._call_claude") as claude:
+        result = await generate_weekly_review(uuid.uuid4(), db)  # type: ignore[arg-type]
+
+    assert result == EMPTY_REVIEW
+    claude.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_weekly_review_generates_and_caches():
+    review = {
+        "headline": "Momentum carried the week.",
+        "bullets": ["a", "b", "c"],
+        "generated_at": "2026-07-06",
+    }
+    get_p, set_p = _no_review_cache()
+    db = _FakeReviewDB([_trade_row(), _trade_row(), _trade_row(outcome="loss", pnl=-3.0)])
+    with get_p, set_p as set_mock, patch(
+        "agents.journal_agent._call_claude",
+        new=AsyncMock(return_value=(json.dumps(review), 200, 100)),
+    ) as claude:
+        result = await generate_weekly_review(uuid.uuid4(), db)  # type: ignore[arg-type]
+
+    assert result == review
+    # Called with the weekly-review model, and cached for 7 days
+    assert claude.await_args.kwargs["model"] == "claude-sonnet-4-6"
+    set_mock.assert_awaited_once()
+    assert set_mock.await_args.args[0].startswith("weekly_review:")
+    assert set_mock.await_args.kwargs["ttl_seconds"] == 604800
+
+
+@pytest.mark.asyncio
+async def test_weekly_review_returns_cached_without_db_or_claude():
+    cached = {"headline": "Cached.", "bullets": [], "generated_at": "2026-07-05"}
+    with patch(
+        "agents.journal_agent.cache_get_json", new=AsyncMock(return_value=cached)
+    ), patch("agents.journal_agent._call_claude") as claude:
+        result = await generate_weekly_review(uuid.uuid4(), None)  # type: ignore[arg-type]
+
+    assert result == cached
+    claude.assert_not_called()

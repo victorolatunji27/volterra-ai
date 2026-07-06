@@ -15,6 +15,7 @@ if __package__ in (None, ""):
 from sqlalchemy import func, select
 
 from agents.flow_analyzer import analyze_flow, store_summary, tag_strategy
+from agents.journal_agent import generate_weekly_review
 from agents.news_fetcher import synthesize_news
 from data.market_data import get_current_price, get_iv_rank
 from data.news_fetcher import fetch_news_for_ticker
@@ -460,13 +461,48 @@ async def match_alerts() -> int:
 
 
 # ---------------------------------------------------------------------------
+# Weekly AI reviews
+# ---------------------------------------------------------------------------
+
+async def run_weekly_reviews() -> int:
+    """
+    Generate (and cache) the weekly AI review for every user.
+
+    generate_weekly_review() itself skips users with fewer than 3 resolved
+    trades this week, so this simply iterates all user_profiles with a
+    per-user try/except. Returns the number of non-empty reviews produced.
+    """
+    async with async_session() as session:
+        users = (await session.execute(select(UserProfile))).scalars().all()
+
+        generated = 0
+        for user in users:
+            try:
+                review = await generate_weekly_review(user.id, session)
+                if review.get("headline"):
+                    generated += 1
+            except Exception as exc:
+                logger.error(
+                    "run_weekly_reviews: failed for user %s — %s. Skipping.",
+                    user.id, exc, exc_info=True,
+                )
+
+    logger.info(
+        "run_weekly_reviews: %d review(s) generated across %d user(s).",
+        generated, len(users),
+    )
+    return generated
+
+
+# ---------------------------------------------------------------------------
 # Scheduler
 # ---------------------------------------------------------------------------
 
 def initialize_scheduler():
     """
-    Start the in-process APScheduler with the weekday jobs:
-    06:30 UTC scan, 06:45 UTC digest, 07:15 UTC strategy alerts.
+    Start the in-process APScheduler:
+    06:30 UTC weekday scan, 06:45 UTC digest, 07:15 UTC strategy alerts,
+    and 08:00 UTC Sunday weekly AI reviews.
 
     NOTE — Railway deployment: replace this with Railway Cron Jobs invoking
     `python scheduler/daily_scan.py` (and a digest entry point) instead.
@@ -495,8 +531,14 @@ def initialize_scheduler():
         id="match_alerts",
         misfire_grace_time=3600,
     )
+    scheduler.add_job(
+        run_weekly_reviews,
+        CronTrigger(day_of_week="sun", hour=8, minute=0),
+        id="weekly_reviews",
+        misfire_grace_time=3600,
+    )
     scheduler.start()
-    logger.info("initialize_scheduler: APScheduler started with 3 weekday jobs (UTC).")
+    logger.info("initialize_scheduler: APScheduler started with 4 jobs (UTC).")
     return scheduler
 
 

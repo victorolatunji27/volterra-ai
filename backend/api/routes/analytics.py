@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from agents.journal_agent import generate_weekly_review
 from api.deps import get_current_user
 from api.limiter import limiter, user_or_ip_key
 from cache import cache_delete, cache_get_json, cache_set_json
@@ -256,6 +257,23 @@ async def get_by_ticker(
         for row in rows
     ]
     return await _store(key, payload)
+
+
+@router.get("/weekly-review")
+@limiter.limit("30/minute", key_func=user_or_ip_key)
+async def get_weekly_review(
+    request: Request,
+    user: UserProfile = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Claude-written recap of the current user's resolved trades this week.
+
+    Cached in Redis (weekly_review:{user_id}:{iso_week}, 7-day TTL) inside
+    generate_weekly_review — the Sunday scheduler job pre-warms it. Users with
+    fewer than 3 resolved trades this week get a null review without a
+    Claude call.
+    """
+    return await generate_weekly_review(user.id, db)
 
 
 @router.get("/equity-curve", response_model=list[EquityPoint])

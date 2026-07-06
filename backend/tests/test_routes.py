@@ -396,6 +396,20 @@ def test_analytics_by_ticker_ranks_and_computes_win_rate(client, no_analytics_ca
     ]
 
 
+def test_weekly_review_requires_auth(client):
+    assert client.get("/api/analytics/weekly-review").status_code == 401
+
+
+def test_weekly_review_empty_under_three_trades(client):
+    app.dependency_overrides[get_current_user] = _fake_user
+    app.dependency_overrides[get_db] = _db_returning(
+        _FakeResult(all=[])  # no resolved trades this week
+    )
+    with patch("agents.journal_agent.cache_get_json", new=AsyncMock(return_value=None)):
+        body = client.get("/api/analytics/weekly-review").json()
+    assert body == {"headline": None, "bullets": [], "generated_at": None}
+
+
 def test_analytics_equity_curve_accumulates(client, no_analytics_cache):
     app.dependency_overrides[get_current_user] = _fake_user
     d1 = datetime(2026, 6, 1, 12, 0, tzinfo=timezone.utc)

@@ -122,6 +122,7 @@ async def _call_claude(
     max_tokens: int,
     retry_message: str | None = None,
     prior_response: str | None = None,
+    model: str = MODEL_VERSION,
 ) -> tuple[str, int, int]:
     """
     Single Claude messages call. Returns (text, tokens_in, tokens_out).
@@ -133,7 +134,7 @@ async def _call_claude(
         messages.append({"role": "user", "content": retry_message})
 
     response = await _get_client().messages.create(
-        model=MODEL_VERSION,
+        model=model,
         system=system,
         messages=messages,
         temperature=temperature,

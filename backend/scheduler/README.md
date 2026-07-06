@@ -1,13 +1,14 @@
 # Scheduler
 
 The in-process APScheduler (started from `main.py`'s lifespan handler) runs
-three weekday jobs, all in UTC:
+four jobs, all in UTC:
 
 | Time (UTC) | Job | What it does |
 |---|---|---|
 | 06:30 Mon–Fri | `run_daily_scan` | Fetch flow + price + news, store scans, generate AI summaries |
 | 06:45 Mon–Fri | `compose_and_send_digest` | Email the top-5 morning brief via Resend |
 | 07:15 Mon–Fri | `match_alerts` | Record an `alert_log` row per user whose strategy tags match today's setups, and email the matched setups to each user (send is best-effort; the row is kept even if email fails) |
+| 08:00 Sun | `run_weekly_reviews` | Generate and cache the Claude weekly performance recap for every user with 3+ resolved trades this week (pre-warms `GET /api/analytics/weekly-review`) |
 
 ## Changing the schedule
 
