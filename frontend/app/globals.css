@@ -1,0 +1,86 @@
+/* VolterraAI design tokens — ported verbatim from VolterraAI.dc.html */
+:root {
+  --serif: var(--font-newsreader), Georgia, 'Times New Roman', serif;
+  --mono: var(--font-plex-mono), ui-monospace, Menlo, monospace;
+  --sans: var(--font-archivo), -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+:root, [data-theme="light"] {
+  --bg: #e9e1cf;
+  --bg-2: #e1d8c3;
+  --bg-grad: repeating-linear-gradient(0deg, transparent 0, transparent 31px, rgba(38, 30, 18, 0.045) 31px, rgba(38, 30, 18, 0.045) 32px);
+  --surface: #f4eedf;
+  --surface-2: #fbf6ea;
+  --surface-solid: #faf5e8;
+  --border: rgba(38, 30, 18, 0.14);
+  --border-2: rgba(38, 30, 18, 0.26);
+  --text: #221e16;
+  --text-2: #5d5645;
+  --text-3: #938b75;
+  --shadow: 0 1px 0 rgba(255, 255, 255, 0.55) inset, 0 2px 0 rgba(38, 30, 18, 0.05), 0 18px 34px -26px rgba(38, 30, 18, 0.45);
+  --glass-blur: saturate(104%);
+}
+[data-theme="dark"] {
+  --bg: #15110a;
+  --bg-2: #1b160d;
+  --bg-grad: repeating-linear-gradient(0deg, transparent 0, transparent 31px, rgba(241, 232, 210, 0.04) 31px, rgba(241, 232, 210, 0.04) 32px);
+  --surface: #1f1910;
+  --surface-2: #271f13;
+  --surface-solid: #1c1610;
+  --border: rgba(241, 232, 210, 0.12);
+  --border-2: rgba(241, 232, 210, 0.22);
+  --text: #f1e8d4;
+  --text-2: #b5aa8e;
+  --text-3: #7f755f;
+  --shadow: 0 1px 0 rgba(255, 248, 232, 0.05) inset, 0 18px 38px -26px rgba(0, 0, 0, 0.75);
+  --glass-blur: saturate(116%);
+}
+:root, [data-accent="aurora"] { --a1: #c0502a; --a2: #d4733b; --a3: #3f7d5c; --a1-soft: rgba(192, 80, 42, 0.14); }
+[data-accent="oceanic"] { --a1: #2f6b54; --a2: #3f846a; --a3: #bd7a2c; --a1-soft: rgba(47, 107, 84, 0.16); }
+[data-accent="cosmic"] { --a1: #7d3350; --a2: #9c4569; --a3: #c0903a; --a1-soft: rgba(125, 51, 80, 0.16); }
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  font-feature-settings: 'ss01', 'cv01';
+}
+h1, h2, h3 {
+  font-family: var(--serif) !important;
+  font-weight: 500;
+  line-height: 1.14 !important;
+  font-feature-settings: 'liga', 'onum';
+}
+/* Paper-grain noise overlay */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 9999;
+  opacity: 0.5;
+  mix-blend-mode: soft-light;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.5'/%3E%3C/svg%3E");
+}
+::-webkit-scrollbar { width: 11px; height: 11px; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 0; border: 3px solid transparent; background-clip: padding-box; }
+::-webkit-scrollbar-track { background: transparent; }
+[data-theme="light"] .vm-dark { display: none !important; }
+[data-theme="dark"] .vm-light { display: none !important; }
+
+input::placeholder { color: var(--text-3); }
+input:focus { outline: none; border-color: var(--a1); box-shadow: 0 0 0 3px var(--a1-soft); }
+
+@keyframes fadeUp { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes drawLine { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes shimmer { 0% { background-position: -460px 0; } 100% { background-position: 460px 0; } }
+@keyframes pulseGlow { 0%, 100% { opacity: 0.55; transform: scale(0.92); } 50% { opacity: 1; transform: scale(1.06); } }
+@keyframes dotFlash { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
+@keyframes floaty { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
+@keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+@keyframes ringPulse { 0% { transform: scale(0.6); opacity: 0.7; } 100% { transform: scale(2.2); opacity: 0; } }
