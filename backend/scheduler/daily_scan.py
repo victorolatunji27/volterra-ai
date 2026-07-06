@@ -21,7 +21,7 @@ from data.news_fetcher import fetch_news_for_ticker
 from data.options_fetcher import fetch_options_flow_yfinance
 from db.database import async_session
 from db.models import AiSummary, AlertLog, DigestLog, FlowScan, UserProfile
-from mailer.digest import build_digest_html, build_digest_subject, send_digest
+from mailer.digest import build_alert_html, build_digest_html, build_digest_subject, send_digest
 
 logger = logging.getLogger(__name__)
 
@@ -406,10 +406,12 @@ async def match_alerts() -> int:
     Record strategy-match alerts for the day.
 
     For every user with non-empty strategy_tags, find today's scans whose AI
-    summary strategy_tags intersect the user's tags and write a single
-    alert_log row per matched user listing the matched tickers.
+    summary strategy_tags intersect the user's tags, write a single alert_log
+    row per matched user listing the matched tickers, and email the matched
+    setups to the user.
 
-    Email delivery is intentionally deferred — this only records the matches.
+    The alert_log row is recorded regardless of email outcome — a bounced or
+    unconfigured send is logged, not raised, so the match record is never lost.
     Returns the number of alert_log rows written.
     """
     async with async_session() as session:
@@ -435,18 +437,21 @@ async def match_alerts() -> int:
         alerts_written = 0
         for user in users:
             user_tags = set(user.strategy_tags or [])
-            matched_tickers = [
-                s["ticker"] for s in tagged if user_tags & set(s["strategy_tags"])
-            ]
-            if not matched_tickers:
+            matches = [s for s in tagged if user_tags & set(s["strategy_tags"])]
+            if not matches:
                 continue
 
-            session.add(AlertLog(user_id=user.id, tickers=matched_tickers))
+            session.add(AlertLog(
+                user_id=user.id,
+                tickers=[s["ticker"] for s in matches],
+            ))
             alerts_written += 1
 
-            # TODO(alert-email): send the matched setups to user.email here once
-            # email alerts are enabled — e.g. build the HTML and call send_digest().
-            # Deliberately not sending email yet.
+            # Email the matched setups (best-effort — never blocks the record).
+            subject = f"VolterraAI alert: {len(matches)} setups match your strategy"
+            html = build_alert_html(matches)
+            if not send_digest([user.email], html, subject):
+                logger.error("match_alerts: alert email send failed for %s.", user.email)
 
         await session.commit()
 

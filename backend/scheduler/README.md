@@ -7,7 +7,7 @@ three weekday jobs, all in UTC:
 |---|---|---|
 | 06:30 Mon–Fri | `run_daily_scan` | Fetch flow + price + news, store scans, generate AI summaries |
 | 06:45 Mon–Fri | `compose_and_send_digest` | Email the top-5 morning brief via Resend |
-| 07:15 Mon–Fri | `match_alerts` | Record an `alert_log` row per user whose strategy tags match today's setups (email delivery deferred — see the TODO in the function) |
+| 07:15 Mon–Fri | `match_alerts` | Record an `alert_log` row per user whose strategy tags match today's setups, and email the matched setups to each user (send is best-effort; the row is kept even if email fails) |
 
 ## Changing the schedule
 

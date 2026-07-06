@@ -230,7 +230,7 @@ class _FakeAlertSession:
 
 
 @pytest.mark.asyncio
-async def test_match_alerts_writes_one_row_per_matched_user_without_email():
+async def test_match_alerts_writes_row_and_sends_email():
     user = SimpleNamespace(id=uuid.uuid4(), email="a@b.com", strategy_tags=["momentum"])
     session = _FakeAlertSession([user])
     scans = [
@@ -252,7 +252,31 @@ async def test_match_alerts_writes_one_row_per_matched_user_without_email():
     assert row.tickers == ["NVDA"]            # only the momentum match
     assert row.user_id == user.id
     assert session.committed is True
-    send_mock.assert_not_called()             # email intentionally deferred
+
+    # The matched setups are emailed to the user.
+    send_mock.assert_called_once()
+    recipients, _html, subject = send_mock.call_args.args
+    assert recipients == ["a@b.com"]
+    assert "1 setups match your strategy" in subject
+
+
+@pytest.mark.asyncio
+async def test_match_alerts_records_row_even_if_email_fails():
+    user = SimpleNamespace(id=uuid.uuid4(), email="a@b.com", strategy_tags=["momentum"])
+    session = _FakeAlertSession([user])
+    scans = [{"ticker": "NVDA", "strategy_tags": ["momentum"]}]
+    with patch("scheduler.daily_scan.async_session", return_value=session), \
+         patch(
+             "scheduler.daily_scan._todays_scans_with_summaries",
+             new=AsyncMock(return_value=scans),
+         ), \
+         patch("scheduler.daily_scan.send_digest", return_value=False):
+        written = await match_alerts()
+
+    # Email failed, but the alert_log row is still recorded and committed.
+    assert written == 1
+    assert len(session.added) == 1
+    assert session.committed is True
 
 
 @pytest.mark.asyncio
