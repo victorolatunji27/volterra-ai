@@ -13,8 +13,7 @@ from api.schemas import (
     AISummaryResponse,
     CreateJournalEntryRequest,
     JournalEntryResponse,
-    UpdateJournalNotesRequest,
-    UpdateJournalOutcomeRequest,
+    UpdateJournalEntryRequest,
 )
 from db.database import get_db
 from db.models import AiSummary, JournalEntry, UserProfile
@@ -22,6 +21,9 @@ from db.models import AiSummary, JournalEntry, UserProfile
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["journal"])
+
+# Fields whose change invalidates the cached analytics aggregates.
+_ANALYTICS_FIELDS = {"outcome", "outcome_pnl_pct", "strategy_type"}
 
 
 def _to_response(entry: JournalEntry, summary: AiSummary | None) -> JournalEntryResponse:
@@ -34,7 +36,7 @@ def _to_response(entry: JournalEntry, summary: AiSummary | None) -> JournalEntry
 async def _get_owned_entry(
     db: AsyncSession, entry_id: int, user: UserProfile
 ) -> JournalEntry:
-    """Load a non-deleted entry owned by *user*, or raise 404."""
+    """Load a non-deleted entry owned by *user*, or raise 404 if not found."""
     entry = (
         await db.execute(
             select(JournalEntry).where(
@@ -46,6 +48,29 @@ async def _get_owned_entry(
     ).scalar_one_or_none()
     if entry is None:
         raise HTTPException(status_code=404, detail="Journal entry not found")
+    return entry
+
+
+async def _get_entry_for_write(
+    db: AsyncSession, entry_id: int, user: UserProfile
+) -> JournalEntry:
+    """Load a non-deleted entry for mutation.
+
+    Raises 404 if it does not exist (or is already deleted), and 403 if it
+    exists but belongs to another user.
+    """
+    entry = (
+        await db.execute(
+            select(JournalEntry).where(
+                JournalEntry.id == entry_id,
+                JournalEntry.deleted_at.is_(None),
+            )
+        )
+    ).scalar_one_or_none()
+    if entry is None:
+        raise HTTPException(status_code=404, detail="Journal entry not found")
+    if entry.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Not your journal entry")
     return entry
 
 
@@ -132,44 +157,39 @@ async def get_journal_entry(
     return _to_response(entry, await _summary_for(db, entry))
 
 
-@router.patch("/{entry_id}/outcome", response_model=JournalEntryResponse)
-@limiter.limit("30/minute", key_func=user_or_ip_key)
-async def update_journal_outcome(
-    request: Request,
-    entry_id: int,
-    body: UpdateJournalOutcomeRequest,
-    user: UserProfile = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-):
-    entry = await _get_owned_entry(db, entry_id, user)
-
-    entry.outcome = body.outcome
-    entry.outcome_pnl_pct = body.outcome_pnl_pct
-    entry.resolved_at = (
-        datetime.now(tz=timezone.utc) if body.outcome != "pending" else None
-    )
-    await db.flush()
-    await db.refresh(entry)
-
-    # Outcomes feed the analytics aggregates — invalidate the hourly cache
-    await invalidate_analytics_cache(user.id)
-
-    return _to_response(entry, await _summary_for(db, entry))
-
-
 @router.patch("/{entry_id}", response_model=JournalEntryResponse)
 @limiter.limit("30/minute", key_func=user_or_ip_key)
-async def update_journal_notes(
+async def update_journal_entry(
     request: Request,
     entry_id: int,
-    body: UpdateJournalNotesRequest,
+    body: UpdateJournalEntryRequest,
     user: UserProfile = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    entry = await _get_owned_entry(db, entry_id, user)
-    entry.user_notes = body.user_notes
+    """Partially update a journal entry the current user owns (403 if not).
+
+    Only the fields present in the request are changed. When ``outcome`` moves
+    off ``pending``, ``resolved_at`` is stamped with the current time; moving
+    back to ``pending`` clears it.
+    """
+    entry = await _get_entry_for_write(db, entry_id, user)
+
+    updates = body.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        setattr(entry, field, value)
+
+    if "outcome" in updates:
+        entry.resolved_at = (
+            datetime.now(tz=timezone.utc) if updates["outcome"] != "pending" else None
+        )
+
     await db.flush()
     await db.refresh(entry)
+
+    # Outcome / P&L / strategy changes feed analytics — bust the cached aggregates.
+    if _ANALYTICS_FIELDS & updates.keys():
+        await invalidate_analytics_cache(user.id)
+
     return _to_response(entry, await _summary_for(db, entry))
 
 
@@ -181,7 +201,8 @@ async def delete_journal_entry(
     user: UserProfile = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    entry = await _get_owned_entry(db, entry_id, user)
+    """Soft-delete an entry the current user owns (403 if not) by stamping deleted_at."""
+    entry = await _get_entry_for_write(db, entry_id, user)
     entry.deleted_at = datetime.now(tz=timezone.utc)
     await db.flush()
     return Response(status_code=204)

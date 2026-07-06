@@ -87,9 +87,19 @@ class _FakeSession:
 
     def __init__(self, results):
         self._results = list(results)
+        self.added = []
 
     async def execute(self, *args, **kwargs):
         return self._results.pop(0)
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    async def flush(self):
+        pass
+
+    async def refresh(self, obj):
+        pass
 
 
 def _db_returning(*results):
@@ -163,11 +173,86 @@ def test_create_journal_bad_strategy_type_returns_422(authed_client):
     assert response.status_code == 422
 
 
-def test_update_outcome_invalid_value_returns_422(authed_client):
-    response = authed_client.patch(
-        "/api/journal/1/outcome", json={"outcome": "moon"}
-    )
+def test_update_journal_invalid_outcome_returns_422(authed_client):
+    response = authed_client.patch("/api/journal/1", json={"outcome": "moon"})
     assert response.status_code == 422
+
+
+def _fake_journal_entry(user_id, **overrides):
+    entry = SimpleNamespace(
+        id=1, user_id=user_id, ticker="AAPL", ai_summary_id=None,
+        user_notes=None, entry_price=None, strategy_type=None,
+        expiry_date=None, outcome="pending", outcome_pnl_pct=None,
+        saved_at=datetime(2026, 6, 10, tzinfo=timezone.utc),
+        resolved_at=None, deleted_at=None,
+    )
+    for key, value in overrides.items():
+        setattr(entry, key, value)
+    return entry
+
+
+def test_update_journal_entry_partial_update(client):
+    user = _fake_user()
+    entry = _fake_journal_entry(user.id)
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_db] = _db_returning(_FakeResult(scalar_one_or_none=entry))
+    with patch("api.routes.journal.invalidate_analytics_cache", new=AsyncMock()):
+        response = client.patch("/api/journal/1", json={"user_notes": "revised"})
+    assert response.status_code == 200
+    assert entry.user_notes == "revised"
+    assert entry.resolved_at is None       # outcome untouched → no resolve stamp
+
+
+def test_update_journal_entry_resolves_on_outcome(client):
+    user = _fake_user()
+    entry = _fake_journal_entry(user.id)
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_db] = _db_returning(_FakeResult(scalar_one_or_none=entry))
+    with patch("api.routes.journal.invalidate_analytics_cache", new=AsyncMock()) as inval:
+        response = client.patch(
+            "/api/journal/1", json={"outcome": "win", "outcome_pnl_pct": 12.5}
+        )
+    assert response.status_code == 200
+    assert entry.outcome == "win"
+    assert entry.outcome_pnl_pct == 12.5
+    assert entry.resolved_at is not None
+    inval.assert_awaited_once()            # analytics cache busted
+
+
+def test_update_journal_entry_not_owned_returns_403(client):
+    user = _fake_user()
+    other = _fake_journal_entry(uuid.uuid4())  # belongs to someone else
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_db] = _db_returning(_FakeResult(scalar_one_or_none=other))
+    response = client.patch("/api/journal/1", json={"user_notes": "x"})
+    assert response.status_code == 403
+
+
+def test_update_journal_entry_missing_returns_404(client):
+    user = _fake_user()
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_db] = _db_returning(_FakeResult(scalar_one_or_none=None))
+    response = client.patch("/api/journal/999", json={"user_notes": "x"})
+    assert response.status_code == 404
+
+
+def test_delete_journal_entry_soft_deletes(client):
+    user = _fake_user()
+    entry = _fake_journal_entry(user.id)
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_db] = _db_returning(_FakeResult(scalar_one_or_none=entry))
+    response = client.delete("/api/journal/1")
+    assert response.status_code == 204
+    assert entry.deleted_at is not None     # soft delete, not removed
+
+
+def test_delete_journal_entry_not_owned_returns_403(client):
+    user = _fake_user()
+    other = _fake_journal_entry(uuid.uuid4())
+    app.dependency_overrides[get_current_user] = lambda: user
+    app.dependency_overrides[get_db] = _db_returning(_FakeResult(scalar_one_or_none=other))
+    response = client.delete("/api/journal/1")
+    assert response.status_code == 403
 
 
 def test_scans_invalid_ticker_returns_400(client):
