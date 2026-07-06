@@ -5,7 +5,7 @@
 # tested via dependency override with a fake user.
 import os
 import uuid
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -45,17 +45,29 @@ def authed_client(client):
     return client
 
 
+class _FakeScalars:
+    def __init__(self, items):
+        self._items = items
+
+    def all(self):
+        return self._items
+
+
 class _FakeResult:
     """Stand-in for a SQLAlchemy Result with pre-baked return values."""
 
-    def __init__(self, *, scalar_one=None, one=None, first=None, all=None):
+    def __init__(self, *, scalar_one=None, scalar_one_or_none=None, one=None, first=None, all=None):
         self._scalar_one = scalar_one
+        self._scalar_one_or_none = scalar_one_or_none
         self._one = one
         self._first = first
         self._all = all or []
 
     def scalar_one(self):
         return self._scalar_one
+
+    def scalar_one_or_none(self):
+        return self._scalar_one_or_none
 
     def one(self):
         return self._one
@@ -65,6 +77,9 @@ class _FakeResult:
 
     def all(self):
         return self._all
+
+    def scalars(self):
+        return _FakeScalars(self._all)
 
 
 class _FakeSession:
@@ -248,3 +263,90 @@ def test_analytics_equity_curve_accumulates(client, no_analytics_cache):
         {"date": "2026-06-01", "cumulative_pnl_pct": 5.0},
         {"date": "2026-06-03", "cumulative_pnl_pct": 3.0},
     ]
+
+
+# ---------------------------------------------------------------------------
+# Ticker detail route
+# ---------------------------------------------------------------------------
+
+def _fake_scan() -> SimpleNamespace:
+    return SimpleNamespace(
+        id=1, ticker="NVDA", scan_date=date(2026, 6, 10),
+        call_volume=45000, put_volume=8000, oi_ratio=4.2,
+        call_put_ratio=None, avg_strike=520.0, avg_expiry=None,
+        iv_rank=68.0, price_at_scan=498.0,
+        created_at=datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc),
+        summary=None, raw_data={"call_put_ratio": 5.6},
+    )
+
+
+def _fake_summary() -> SimpleNamespace:
+    return SimpleNamespace(
+        id=7, setup_summary="Heavy calls", flow_interpretation="Bullish",
+        risk_note="IV elevated", strategy_tags=["momentum"],
+        created_at=datetime(2026, 6, 10, 12, 0, tzinfo=timezone.utc),
+        news_used={"catalyst_note": "earnings", "contradiction_note": "macro"},
+    )
+
+
+def test_ticker_requires_auth(client):
+    assert client.get("/api/ticker/NVDA").status_code == 401
+
+
+def test_ticker_invalid_symbol_returns_400(authed_client):
+    response = authed_client.get("/api/ticker/TOOLONGTICKER")
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Invalid ticker symbol"
+
+
+def test_ticker_unknown_symbol_returns_404(client):
+    app.dependency_overrides[get_current_user] = _fake_user
+    app.dependency_overrides[get_db] = _db_returning(
+        _FakeResult(scalar_one_or_none=None)  # no latest scan for this symbol
+    )
+    response = client.get("/api/ticker/ZZZZ")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "No data for ZZZZ"
+
+
+def test_ticker_detail_success(client):
+    app.dependency_overrides[get_current_user] = _fake_user
+    scan = _fake_scan()
+    app.dependency_overrides[get_db] = _db_returning(
+        _FakeResult(scalar_one_or_none=scan),            # latest scan
+        _FakeResult(scalar_one_or_none=_fake_summary()),  # latest summary
+        _FakeResult(all=[scan]),                          # history rows
+    )
+    series = [{"date": "2026-06-01", "close": 100.0}, {"date": "2026-06-02", "close": 102.5}]
+    with patch("api.routes.ticker.get_price_history", new=AsyncMock(return_value=series)):
+        body = client.get("/api/ticker/nvda").json()
+
+    assert body["symbol"] == "NVDA"                       # normalised to uppercase
+    assert body["latest"]["ticker"] == "NVDA"
+    assert body["latest"]["call_put_ratio"] == 5.6        # pulled from raw_data
+    assert body["latest"]["summary"]["setup_summary"] == "Heavy calls"
+    assert body["news"] == {"catalyst_note": "earnings", "contradiction_note": "macro"}
+    assert body["history"] == [{
+        "scan_date": "2026-06-10", "oi_ratio": 4.2, "call_put_ratio": 5.6,
+        "iv_rank": 68.0, "price_at_scan": 498.0,
+    }]
+    assert body["price_series"] == series
+
+
+def test_ticker_detail_degrades_when_price_history_fails(client):
+    app.dependency_overrides[get_current_user] = _fake_user
+    scan = _fake_scan()
+    app.dependency_overrides[get_db] = _db_returning(
+        _FakeResult(scalar_one_or_none=scan),
+        _FakeResult(scalar_one_or_none=_fake_summary()),
+        _FakeResult(all=[scan]),
+    )
+    # yfinance failure → get_price_history returns None; request must still succeed.
+    with patch("api.routes.ticker.get_price_history", new=AsyncMock(return_value=None)):
+        response = client.get("/api/ticker/NVDA")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["price_series"] is None
+    assert body["latest"]["ticker"] == "NVDA"
+    assert len(body["history"]) == 1

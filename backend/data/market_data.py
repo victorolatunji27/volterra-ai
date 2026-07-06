@@ -14,10 +14,13 @@
 
 import asyncio
 import logging
+from datetime import date
 from typing import Any
 
 import pandas as pd
 import yfinance as yf
+
+from cache import cache_get_json, cache_set_json
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +146,26 @@ def _fetch_iv_rank_data(ticker: str, lookback_days: int) -> dict[str, Any] | Non
     }
 
 
+def _fetch_price_history(symbol: str, days: int) -> list[dict] | None:
+    """
+    Synchronous: return [{date, close}] for the last *days* calendar days.
+
+    Returns None when yfinance has no data for the symbol (empty frame),
+    which the caller treats as "no price series available".
+    """
+    t = yf.Ticker(symbol)
+    hist = t.history(period=f"{days}d")
+    if hist.empty:
+        logger.warning("_fetch_price_history(%s): history returned empty DataFrame.", symbol)
+        return None
+
+    return [
+        {"date": idx.date().isoformat(), "close": round(float(close), 2)}
+        for idx, close in hist["Close"].items()
+        if pd.notna(close)
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Public async API
 # ---------------------------------------------------------------------------
@@ -224,3 +247,35 @@ async def get_iv_rank(ticker: str, lookback_days: int = 252) -> float | None:
     )
 
     return iv_rank
+
+
+async def get_price_history(symbol: str, days: int = 30) -> list[dict] | None:
+    """
+    Return a daily close series for *symbol* as [{date, close}] over the last
+    *days* calendar days, for the detail-page chart.
+
+    The result is cached in Redis under price_history:{symbol}:{today} for 24h
+    (86400s): intraday moves don't matter for a 30-day line, so one fetch per
+    symbol per day is plenty.
+
+    yfinance is synchronous; the blocking call is offloaded via
+    asyncio.to_thread(). Returns None on an empty result or any failure, so the
+    caller can degrade gracefully rather than fail the whole request.
+    """
+    cache_key = f"price_history:{symbol.upper()}:{date.today().isoformat()}"
+
+    cached = await cache_get_json(cache_key)
+    if cached is not None:
+        return cached
+
+    try:
+        series = await asyncio.to_thread(_fetch_price_history, symbol, days)
+    except Exception as exc:
+        logger.error("get_price_history(%s): yfinance failed — %s", symbol, exc, exc_info=True)
+        return None
+
+    if not series:
+        return None
+
+    await cache_set_json(cache_key, series, ttl_seconds=86400)
+    return series

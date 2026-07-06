@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agents.flow_analyzer import analyze_flow
+from data.market_data import get_price_history
 from data.news_fetcher import format_news_for_prompt
 from scheduler.daily_scan import validate_flow_scan
 
@@ -156,3 +157,43 @@ def test_validate_flow_scan_rejects_bad_shapes():
         "ticker": "NVDA", "oi_ratio": 1.0,
         "call_volume": 1, "put_volume": 1, "price_at_scan": 0,
     }) is False
+
+
+# ---------------------------------------------------------------------------
+# get_price_history
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_get_price_history_returns_series_and_caches():
+    series = [{"date": "2026-06-01", "close": 100.0}]
+    with patch("data.market_data.cache_get_json", new=AsyncMock(return_value=None)), \
+         patch("data.market_data.cache_set_json", new=AsyncMock(return_value=True)) as set_mock, \
+         patch("data.market_data._fetch_price_history", return_value=series):
+        result = await get_price_history("NVDA", days=30)
+
+    assert result == series
+    # Cached under the price_history key with a 24h TTL
+    set_mock.assert_awaited_once()
+    assert set_mock.await_args.args[0].startswith("price_history:NVDA:")
+    assert set_mock.await_args.kwargs["ttl_seconds"] == 86400
+
+
+@pytest.mark.asyncio
+async def test_get_price_history_returns_cached_without_fetch():
+    cached = [{"date": "2026-06-01", "close": 100.0}]
+    with patch("data.market_data.cache_get_json", new=AsyncMock(return_value=cached)), \
+         patch("data.market_data._fetch_price_history") as fetch_mock:
+        result = await get_price_history("NVDA")
+
+    assert result == cached
+    fetch_mock.assert_not_called()  # cache hit — no yfinance call
+
+
+@pytest.mark.asyncio
+async def test_get_price_history_returns_none_on_failure():
+    with patch("data.market_data.cache_get_json", new=AsyncMock(return_value=None)), \
+         patch("data.market_data.cache_set_json", new=AsyncMock(return_value=True)), \
+         patch("data.market_data._fetch_price_history", side_effect=RuntimeError("boom")):
+        result = await get_price_history("NVDA")
+
+    assert result is None
