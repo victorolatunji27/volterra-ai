@@ -15,6 +15,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from api.limiter import limiter
 from api.routes.alerts import router as alerts_router
 from api.routes.analytics import router as analytics_router
+from api.routes.demo import router as demo_router
 from api.routes.journal import router as journal_router
 from api.routes.scans import router as scans_router
 from api.routes.ticker import router as ticker_router
@@ -104,6 +105,7 @@ app.include_router(users_router, prefix="/api/users")
 app.include_router(analytics_router, prefix="/api/analytics")
 app.include_router(ticker_router, prefix="/api/ticker")
 app.include_router(alerts_router, prefix="/api/alerts")
+app.include_router(demo_router, prefix="/api/demo")
 
 
 @app.get("/health")

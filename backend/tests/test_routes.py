@@ -133,6 +133,21 @@ def test_health(client):
     assert response.json()["status"] == "ok"
 
 
+def test_demo_setup_is_public_and_static(client):
+    # No auth override and no DB override — proves it works logged-out and
+    # never touches the database.
+    response = client.get("/api/demo/setup")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["is_demo"] is True
+    assert body["ticker"] == "DEMO"
+    for key in (
+        "ticker", "strategy_tags", "call_put_ratio", "oi_ratio", "iv_rank",
+        "price_at_scan", "setup_summary", "risk_note",
+    ):
+        assert key in body
+
+
 def test_journal_requires_auth(client):
     response = client.get("/api/journal")
     assert response.status_code == 401
