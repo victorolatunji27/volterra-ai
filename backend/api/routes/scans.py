@@ -2,6 +2,7 @@
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -105,3 +106,64 @@ async def get_ticker_summary(
         raise HTTPException(status_code=404, detail=f"No summary found for {ticker}")
 
     return summary
+
+
+# ---------------------------------------------------------------------------
+# Public demo setup — registered separately in main.py at /api/demo.
+# No auth, no database, no Claude: a hardcoded illustrative scan card for the
+# landing page, in the exact shape the frontend renders without branching.
+# ---------------------------------------------------------------------------
+
+demo_router = APIRouter(tags=["demo"])
+
+
+class DemoSetupResponse(BaseModel):
+    is_demo: bool
+    ticker: str
+    company_name: str
+    strategy_tag: str
+    call_put_ratio: float
+    oi_ratio: float
+    iv_rank: int
+    price_at_scan: float
+    price_change_pct: float
+    avg_strike: float
+    expiry: str
+    setup_summary: str
+    flow_interpretation: str
+    risk_note: str
+
+
+# Built once at import; every request returns the same constant.
+_DEMO_SETUP = DemoSetupResponse(
+    is_demo=True,
+    ticker="NVDA",
+    company_name="NVIDIA Corp.",
+    strategy_tag="momentum",
+    call_put_ratio=2.8,
+    oi_ratio=4.1,
+    iv_rank=61,
+    price_at_scan=172.40,
+    price_change_pct=2.4,
+    avg_strike=180.0,
+    expiry="2025-06-21",
+    setup_summary=(
+        "Heavy call buying concentrated in near-dated $180 strikes ahead of the "
+        "GTC keynote. Volume is running 4x open interest, suggesting fresh "
+        "positioning rather than rolls."
+    ),
+    flow_interpretation=(
+        "The dominant signal is fresh call buying in the $180 strike expiring Jun 21."
+    ),
+    risk_note=(
+        "IV is elevated — a post-event vol crush could erase gains even if the "
+        "stock moves up."
+    ),
+)
+
+
+@demo_router.get("/setup", response_model=DemoSetupResponse)
+@limiter.limit("60/minute")
+async def demo_setup(request: Request):
+    """Static illustrative setup for the landing page. Public — no auth, no DB."""
+    return _DEMO_SETUP

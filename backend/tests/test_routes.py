@@ -135,17 +135,35 @@ def test_health(client):
 
 def test_demo_setup_is_public_and_static(client):
     # No auth override and no DB override — proves it works logged-out and
-    # never touches the database.
+    # never touches the database. Asserts the exact contract shape the
+    # frontend renders without branching.
     response = client.get("/api/demo/setup")
     assert response.status_code == 200
-    body = response.json()
-    assert body["is_demo"] is True
-    assert body["ticker"] == "DEMO"
-    for key in (
-        "ticker", "strategy_tags", "call_put_ratio", "oi_ratio", "iv_rank",
-        "price_at_scan", "setup_summary", "risk_note",
-    ):
-        assert key in body
+    assert response.json() == {
+        "is_demo": True,
+        "ticker": "NVDA",
+        "company_name": "NVIDIA Corp.",
+        "strategy_tag": "momentum",
+        "call_put_ratio": 2.8,
+        "oi_ratio": 4.1,
+        "iv_rank": 61,
+        "price_at_scan": 172.40,
+        "price_change_pct": 2.4,
+        "avg_strike": 180.0,
+        "expiry": "2025-06-21",
+        "setup_summary": (
+            "Heavy call buying concentrated in near-dated $180 strikes ahead of the "
+            "GTC keynote. Volume is running 4x open interest, suggesting fresh "
+            "positioning rather than rolls."
+        ),
+        "flow_interpretation": (
+            "The dominant signal is fresh call buying in the $180 strike expiring Jun 21."
+        ),
+        "risk_note": (
+            "IV is elevated — a post-event vol crush could erase gains even if the "
+            "stock moves up."
+        ),
+    }
 
 
 def test_journal_requires_auth(client):

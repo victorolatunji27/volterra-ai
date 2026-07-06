@@ -15,8 +15,8 @@ from slowapi.middleware import SlowAPIMiddleware
 from api.limiter import limiter
 from api.routes.alerts import router as alerts_router
 from api.routes.analytics import router as analytics_router
-from api.routes.demo import router as demo_router
 from api.routes.journal import router as journal_router
+from api.routes.scans import demo_router
 from api.routes.scans import router as scans_router
 from api.routes.ticker import router as ticker_router
 from api.routes.users import router as users_router
