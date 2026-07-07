@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { useTheme, WIN, LOSS } from "@/components/theme";
 import { Spark, Area, Donut } from "@/components/charts";
+import PaywallGate from "@/components/PaywallGate";
 import { useToast } from "@/components/toast";
 import { fetchAnalytics, AnalyticsData } from "@/lib/api";
 import { DEMO_ANALYTICS_OVERVIEW, DEMO_EQUITY, DEMO_STRATEGY_PERF, DEMO_TICKER_PERF } from "@/lib/demo";
@@ -141,7 +142,8 @@ export default function AnalyticsPage() {
           </div>
         </div>
 
-        {/* Weekly AI review */}
+        {/* Weekly AI review — Pro feature after the trial */}
+        <PaywallGate feature="weekly AI review">
         <div style={{ position: "relative", borderRadius: 9, border: "1px solid var(--border-2)", background: "linear-gradient(160deg,var(--a1-soft),var(--surface))", padding: 24, boxShadow: "var(--shadow)", overflow: "hidden" }}>
           <div style={{ position: "absolute", top: -40, right: -30, width: 160, height: 160, borderRadius: "50%", background: "radial-gradient(closest-side,var(--a1-soft),transparent)", filter: "blur(10px)" }} />
           <div style={{ position: "relative" }}>
@@ -170,6 +172,7 @@ export default function AnalyticsPage() {
             </button>
           </div>
         </div>
+        </PaywallGate>
       </div>
     </>
   );

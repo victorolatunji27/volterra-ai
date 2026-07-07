@@ -16,13 +16,38 @@ export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000
 
 const TIMEOUT_MS = 4000;
 
-async function apiGet<T>(path: string): Promise<T | null> {
+/** Thrown when an authenticated API call returns HTTP 402 (Pro-only). */
+export class PaywallError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PaywallError";
+  }
+}
+
+async function throwPaywall(res: Response): Promise<never> {
+  let message = "This feature requires the Pro plan.";
   try {
-    const res = await fetch(`${API_URL}${path}`, {
+    const body = await res.json();
+    message = body.message ?? body.detail ?? message;
+  } catch {
+    /* non-JSON body — keep the default message */
+  }
+  throw new PaywallError(message);
+}
+
+async function apiGet<T>(path: string): Promise<T | null> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, {
       signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: authHeaders(),
     });
-    if (!res.ok) return null;
+  } catch {
+    return null;
+  }
+  if (res.status === 402) await throwPaywall(res);
+  if (!res.ok) return null;
+  try {
     return (await res.json()) as T;
   } catch {
     return null;
@@ -30,17 +55,19 @@ async function apiGet<T>(path: string): Promise<T | null> {
 }
 
 export async function apiSend(path: string, method: string, body?: unknown): Promise<boolean> {
+  let res: Response;
   try {
-    const res = await fetch(`${API_URL}${path}`, {
+    res = await fetch(`${API_URL}${path}`, {
       method,
       signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: { "Content-Type": "application/json", ...authHeaders() },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-    return res.ok;
   } catch {
     return false;
   }
+  if (res.status === 402) await throwPaywall(res);
+  return res.ok;
 }
 
 function authHeaders(): Record<string, string> {
@@ -308,6 +335,31 @@ export async function fetchAnalytics(): Promise<AnalyticsData> {
     strategyPerf: DEMO_STRATEGY_PERF,
     tickerPerf: DEMO_TICKER_PERF,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Current user
+// ---------------------------------------------------------------------------
+
+export interface Me {
+  id: string;
+  email: string;
+  tier: string;
+  created_at: string;
+  strategy_tags: string[] | null;
+}
+
+let mePromise: Promise<Me | null> | null = null;
+
+/**
+ * GET /api/users/me, memoized per page load so multiple PaywallGates share
+ * one request. Null in demo mode / when unauthenticated.
+ */
+export function fetchMe(): Promise<Me | null> {
+  if (!mePromise) {
+    mePromise = apiGet<Me>("/api/users/me").catch(() => null);
+  }
+  return mePromise;
 }
 
 // ---------------------------------------------------------------------------

@@ -30,8 +30,8 @@ export default function SettingsPage() {
         <p style={{ fontSize: 15.5, color: "var(--text-2)", margin: 0 }}>Manage your account, billing, and how VolterraAI looks.</p>
       </div>
       <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "1fr 1fr", gap: 18, alignItems: "start" }}>
-        {/* Account */}
-        <div style={card}>
+        {/* Account — #billing is the PaywallGate "Upgrade to Pro" target */}
+        <div id="billing" style={card}>
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 18 }}>Account</div>
           <div style={{ display: "flex", alignItems: "center", gap: 14, paddingBottom: 20, marginBottom: 6, borderBottom: "1px solid var(--border)" }}>
             <div style={{ width: 48, height: 48, borderRadius: "50%", background: "linear-gradient(135deg,var(--a1),var(--a3))", display: "grid", placeItems: "center", fontSize: 18, fontWeight: 600, color: "#faf6ee" }}>A</div>

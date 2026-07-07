@@ -1,6 +1,7 @@
 "use client";
 // Alerts — email preference toggles + strategy preference chips.
 import React, { useState } from "react";
+import PaywallGate from "@/components/PaywallGate";
 import { useToast } from "@/components/toast";
 import { saveStrategyPrefs } from "@/lib/api";
 import { useWidth } from "@/lib/useWidth";
@@ -45,7 +46,7 @@ export default function AlertsPage() {
   };
 
   return (
-    <>
+    <PaywallGate feature="alerts center">
       <div style={{ marginBottom: 24 }}>
         <h1 style={{ fontSize: 30, fontWeight: 600, lineHeight: 1.12, letterSpacing: "-0.03em", margin: "0 0 6px", whiteSpace: "nowrap" }}>Alerts</h1>
         <p style={{ fontSize: 15.5, color: "var(--text-2)", margin: 0 }}>Decide when VolterraAI reaches out — and about what.</p>
@@ -55,15 +56,23 @@ export default function AlertsPage() {
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 4 }}>Email preferences</div>
           <div style={{ fontSize: 13, color: "var(--text-3)", marginBottom: 18 }}>Choose what lands in your inbox.</div>
           <div style={{ display: "flex", flexDirection: "column" }}>
-            {EMAIL_ROWS.map((r, i) => (
-              <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "16px 0", borderTop: i > 0 ? "1px solid var(--border)" : "none" }}>
-                <div>
-                  <div style={{ fontSize: 14.5, fontWeight: 500, marginBottom: 4 }}>{r[1]}</div>
-                  <div style={{ fontSize: 13, color: "var(--text-3)", lineHeight: 1.45 }}>{r[2]}</div>
+            {EMAIL_ROWS.map((r, i) => {
+              const row = (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, padding: "16px 0", borderTop: i > 0 ? "1px solid var(--border)" : "none" }}>
+                  <div>
+                    <div style={{ fontSize: 14.5, fontWeight: 500, marginBottom: 4 }}>{r[1]}</div>
+                    <div style={{ fontSize: 13, color: "var(--text-3)", lineHeight: 1.45 }}>{r[2]}</div>
+                  </div>
+                  <Switch on={settings[r[0]]} onClick={() => toggle(r[0])} />
                 </div>
-                <Switch on={settings[r[0]]} onClick={() => toggle(r[0])} />
-              </div>
-            ))}
+              );
+              // The daily digest is Pro after the trial — gate just this row.
+              return r[0] === "digest" ? (
+                <PaywallGate key={i} feature="daily digest">{row}</PaywallGate>
+              ) : (
+                <React.Fragment key={i}>{row}</React.Fragment>
+              );
+            })}
           </div>
         </div>
         <div style={card}>
@@ -81,6 +90,6 @@ export default function AlertsPage() {
           </div>
         </div>
       </div>
-    </>
+    </PaywallGate>
   );
 }
