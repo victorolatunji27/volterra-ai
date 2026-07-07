@@ -1,81 +1,20 @@
 "use client";
-// Theme (light/dark) + accent (aurora/oceanic/cosmic) context, persisted to
-// localStorage and applied as data-theme / data-accent on the app wrapper.
-import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
+// Theme controls UI (accent swatches + light/dark toggle).
+//
+// The provider/context itself lives in context/ThemeContext.tsx; everything
+// is re-exported here so existing `@/components/theme` imports keep working.
+import React from "react";
+import { ACCENTS, AccentKey, useTheme } from "@/context/ThemeContext";
 
-export const ACCENTS = {
-  aurora: { a1: "#c0502a", a2: "#d4733b", a3: "#3f7d5c" },
-  oceanic: { a1: "#2f6b54", a2: "#3f846a", a3: "#bd7a2c" },
-  cosmic: { a1: "#7d3350", a2: "#9c4569", a3: "#c0903a" },
-} as const;
-export type AccentKey = keyof typeof ACCENTS;
-export type ThemeKey = "light" | "dark";
-
-export const WIN = "#3c8a5f";
-export const LOSS = "#bf473f";
-export const WARN = "#bd8330";
-
-interface ThemeCtx {
-  theme: ThemeKey;
-  accent: AccentKey;
-  ac: (typeof ACCENTS)[AccentKey];
-  setTheme: (t: ThemeKey) => void;
-  setAccent: (a: AccentKey) => void;
-}
-
-const Ctx = createContext<ThemeCtx | null>(null);
-
-export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = useState<ThemeKey>("light");
-  const [accent, setAccentState] = useState<AccentKey>("aurora");
-
-  useEffect(() => {
-    const t = localStorage.getItem("volterra-theme") as ThemeKey | null;
-    const a = localStorage.getItem("volterra-accent") as AccentKey | null;
-    if (t === "light" || t === "dark") setThemeState(t);
-    if (a && a in ACCENTS) setAccentState(a);
-  }, []);
-
-  // Mirror onto <html> so the body background (overscroll area) matches too.
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    document.documentElement.dataset.accent = accent;
-  }, [theme, accent]);
-
-  const setTheme = useCallback((t: ThemeKey) => {
-    setThemeState(t);
-    localStorage.setItem("volterra-theme", t);
-  }, []);
-  const setAccent = useCallback((a: AccentKey) => {
-    setAccentState(a);
-    localStorage.setItem("volterra-accent", a);
-  }, []);
-
-  return (
-    <Ctx.Provider value={{ theme, accent, ac: ACCENTS[accent], setTheme, setAccent }}>
-      <div
-        data-theme={theme}
-        data-accent={accent}
-        style={{
-          minHeight: "100vh",
-          background: "var(--bg)",
-          backgroundImage: "var(--bg-grad)",
-          color: "var(--text)",
-          position: "relative",
-          overflowX: "hidden",
-        }}
-      >
-        {children}
-      </div>
-    </Ctx.Provider>
-  );
-}
-
-export function useTheme(): ThemeCtx {
-  const ctx = useContext(Ctx);
-  if (!ctx) throw new Error("useTheme must be used inside ThemeProvider");
-  return ctx;
-}
+export {
+  ACCENTS,
+  LOSS,
+  ThemeProvider,
+  useTheme,
+  WARN,
+  WIN,
+} from "@/context/ThemeContext";
+export type { AccentKey, ThemeKey } from "@/context/ThemeContext";
 
 /** Accent swatch strip + light/dark toggle, as in the design's nav/sidebar. */
 export function ThemeControls() {
