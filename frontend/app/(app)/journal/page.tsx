@@ -1,9 +1,11 @@
 "use client";
 // Trade journal — stats, outcome filters, expandable rows table.
 import React, { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useTheme, WIN, LOSS } from "@/components/theme";
 import { useToast } from "@/components/toast";
 import { ICONS, svgIcon } from "@/components/icons";
+import EmptyState, { BookmarkIcon } from "@/components/EmptyState";
 import { fetchJournal, apiSend } from "@/lib/api";
 import { DEMO_JOURNAL, JournalRow } from "@/lib/demo";
 import { useWidth } from "@/lib/useWidth";
@@ -17,17 +19,23 @@ const TAG_COLOR: Record<string, string> = {
 };
 
 export default function JournalPage() {
+  const router = useRouter();
   const { ac } = useTheme();
   const { flash } = useToast();
   const w = useWidth();
   const narrow = w < 900;
   const [rows, setRows] = useState<JournalRow[]>(DEMO_JOURNAL);
+  const [journalEmpty, setJournalEmpty] = useState(false);
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("All");
   const [open, setOpen] = useState<number | null>(null);
 
   useEffect(() => {
     let alive = true;
-    fetchJournal().then((r) => { if (alive) setRows(r.rows); });
+    fetchJournal().then((r) => {
+      if (!alive) return;
+      setRows(r.rows);
+      setJournalEmpty(r.empty);
+    });
     return () => { alive = false; };
   }, []);
 
@@ -64,6 +72,17 @@ export default function JournalPage() {
         </button>
       </div>
 
+      {journalEmpty ? (
+        /* Nothing saved yet — reachable API returned an empty journal. */
+        <EmptyState
+          icon={<BookmarkIcon />}
+          heading="No trades saved yet"
+          body="When you save a setup from the daily scan, it appears here."
+          actionLabel="Go to today's scan"
+          onAction={() => router.push("/scan")}
+        />
+      ) : (
+      <>
       <div style={{ display: "grid", gridTemplateColumns: narrow ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: 14, marginBottom: 24 }}>
         {stats.map((s, i) => (
           <div key={i} style={{ padding: "16px 18px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", boxShadow: "var(--shadow)" }}>
@@ -136,6 +155,8 @@ export default function JournalPage() {
             );
           })}
         </div>
+      )}
+      </>
       )}
     </>
   );

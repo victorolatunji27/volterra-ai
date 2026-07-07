@@ -1,11 +1,13 @@
 "use client";
 // Daily scan (dashboard) — greeting, stat cards, ranked setups, scanning skeleton.
-import React, { useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useTheme, WIN } from "@/components/theme";
 import { Spark } from "@/components/charts";
 import { rescanIcon } from "@/components/icons";
+import EmptyState, { ClockIcon } from "@/components/EmptyState";
 import SetupCard from "@/components/SetupCard";
-import { fetchSetups } from "@/lib/api";
+import { useToast } from "@/components/toast";
+import { apiSend, fetchSetups } from "@/lib/api";
 import { DEMO_SETUPS, Setup } from "@/lib/demo";
 import { useWidth } from "@/lib/useWidth";
 
@@ -67,21 +69,40 @@ function ScanningCards() {
 export default function ScanPage() {
   const w = useWidth();
   const mid = w < 1180;
+  const { flash } = useToast();
   const [setups, setSetups] = useState<Setup[]>(DEMO_SETUPS);
+  const [empty, setEmpty] = useState(false);
   const [scanning, setScanning] = useState(false);
   const scanTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const alive = useRef(true);
+
+  const load = useCallback(() => {
+    fetchSetups().then((r) => {
+      if (!alive.current) return;
+      setSetups(r.setups);
+      setEmpty(r.empty);
+    });
+  }, []);
 
   useEffect(() => {
-    let alive = true;
-    fetchSetups().then((r) => { if (alive) setSetups(r.setups); });
-    return () => { alive = false; };
-  }, []);
+    alive.current = true;
+    load();
+    return () => { alive.current = false; };
+  }, [load]);
 
   const rescan = () => {
     if (scanning) return;
+    // Kick the real scan off server-side (auth required; best-effort in demo
+    // mode), then re-check for results after the skeleton animation.
+    apiSend("/api/scans/trigger", "POST").then((ok) => {
+      if (ok) flash("Re-scan started — fresh setups in a few minutes");
+    });
     setScanning(true);
     if (scanTimer.current) clearTimeout(scanTimer.current);
-    scanTimer.current = setTimeout(() => setScanning(false), 2100);
+    scanTimer.current = setTimeout(() => {
+      setScanning(false);
+      load();
+    }, 2100);
   };
 
   const bullish = setups.filter((s) => s.bull).length;
@@ -102,23 +123,38 @@ export default function ScanPage() {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: mid ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: 16, marginBottom: 14 }}>
-        <StatCards topTicker={setups[0]?.t ?? "—"} topScore={setups[0]?.score ?? 0} bullish={bullish} total={setups.length} />
-      </div>
-
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "30px 0 16px" }}>
-        <h2 style={{ fontSize: 16, fontWeight: 600, lineHeight: 1.2, letterSpacing: "-0.01em", margin: 0, whiteSpace: "nowrap" }}>Today&apos;s ranked setups</h2>
-        <span style={{ fontSize: 13, color: "var(--text-3)" }}>Sorted by unusual activity score</span>
-      </div>
-
-      {scanning ? (
-        <ScanningCards />
-      ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {setups.map((s) => (
-            <SetupCard key={s.t} s={s} />
-          ))}
+      {empty && !scanning ? (
+        /* Weekend / market closed / scan not yet run. */
+        <div style={{ marginTop: 24 }}>
+          <EmptyState
+            icon={<ClockIcon />}
+            heading="No scan today"
+            body="The scan runs every weekday at 6:30am ET. Check back then, or trigger a manual re-scan."
+            actionLabel="Re-scan"
+            onAction={rescan}
+          />
         </div>
+      ) : (
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: mid ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: 16, marginBottom: 14 }}>
+            <StatCards topTicker={setups[0]?.t ?? "—"} topScore={setups[0]?.score ?? 0} bullish={bullish} total={setups.length} />
+          </div>
+
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "30px 0 16px" }}>
+            <h2 style={{ fontSize: 16, fontWeight: 600, lineHeight: 1.2, letterSpacing: "-0.01em", margin: 0, whiteSpace: "nowrap" }}>Today&apos;s ranked setups</h2>
+            <span style={{ fontSize: 13, color: "var(--text-3)" }}>Sorted by unusual activity score</span>
+          </div>
+
+          {scanning ? (
+            <ScanningCards />
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+              {setups.map((s) => (
+                <SetupCard key={s.t} s={s} />
+              ))}
+            </div>
+          )}
+        </>
       )}
     </>
   );

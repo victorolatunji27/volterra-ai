@@ -104,10 +104,13 @@ function scanToSetup(s: ApiScan, i: number): Setup {
   };
 }
 
-export async function fetchSetups(): Promise<{ setups: Setup[]; demo: boolean }> {
+export async function fetchSetups(): Promise<{ setups: Setup[]; demo: boolean; empty: boolean }> {
   const data = await apiGet<ApiScan[]>("/api/scans/today");
-  if (data && data.length > 0) return { setups: data.map(scanToSetup), demo: false };
-  return { setups: DEMO_SETUPS, demo: true };
+  // Unreachable API → illustrative demo data. A reachable API returning []
+  // (weekend, scan not yet run) → genuine empty state.
+  if (data === null) return { setups: DEMO_SETUPS, demo: true, empty: false };
+  if (data.length === 0) return { setups: [], demo: false, empty: true };
+  return { setups: data.map(scanToSetup), demo: false, empty: false };
 }
 
 // ---------------------------------------------------------------------------
@@ -227,22 +230,22 @@ const STRAT_LABEL: Record<string, string> = {
   hedge: "Hedge", iv_crush: "IV Crush", contrarian: "Contrarian", neutral: "Neutral",
 };
 
-export async function fetchJournal(): Promise<{ rows: JournalRow[]; demo: boolean }> {
+export async function fetchJournal(): Promise<{ rows: JournalRow[]; demo: boolean; empty: boolean }> {
   const data = await apiGet<ApiJournalEntry[]>("/api/journal?limit=100");
-  if (data && data.length > 0) {
-    const rows = data.map((e): JournalRow => ({
-      id: e.id,
-      t: e.ticker,
-      strat: STRAT_LABEL[e.strategy_type ?? ""] ?? "Momentum",
-      entry: e.entry_price ?? 0,
-      exp: fmtExpiry(e.expiry_date),
-      status: e.outcome === "win" ? "Win" : e.outcome === "loss" ? "Loss" : e.outcome === "scratch" ? "Scratch" : "Pending",
-      pnl: e.outcome_pnl_pct ?? 0,
-      note: e.user_notes ?? "",
-    }));
-    return { rows, demo: false };
-  }
-  return { rows: DEMO_JOURNAL, demo: true };
+  // Unreachable/unauthenticated → demo rows; reachable-but-empty → empty state.
+  if (data === null) return { rows: DEMO_JOURNAL, demo: true, empty: false };
+  if (data.length === 0) return { rows: [], demo: false, empty: true };
+  const rows = data.map((e): JournalRow => ({
+    id: e.id,
+    t: e.ticker,
+    strat: STRAT_LABEL[e.strategy_type ?? ""] ?? "Momentum",
+    entry: e.entry_price ?? 0,
+    exp: fmtExpiry(e.expiry_date),
+    status: e.outcome === "win" ? "Win" : e.outcome === "loss" ? "Loss" : e.outcome === "scratch" ? "Scratch" : "Pending",
+    pnl: e.outcome_pnl_pct ?? 0,
+    note: e.user_notes ?? "",
+  }));
+  return { rows, demo: false, empty: false };
 }
 
 // ---------------------------------------------------------------------------

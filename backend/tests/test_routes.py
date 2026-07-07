@@ -298,6 +298,19 @@ def test_delete_journal_entry_not_owned_returns_404(client):
     assert response.json()["detail"] == "Journal entry not found"
 
 
+def test_trigger_scan_requires_auth(client):
+    assert client.post("/api/scans/trigger").status_code == 401
+
+
+def test_trigger_scan_starts_background_scan(client):
+    app.dependency_overrides[get_current_user] = _fake_user
+    with patch("scheduler.daily_scan.run_daily_scan", new=AsyncMock(return_value=[])) as scan:
+        response = client.post("/api/scans/trigger")
+    assert response.status_code == 200
+    assert response.json() == {"status": "started"}
+    scan.assert_awaited_once()  # TestClient runs background tasks post-response
+
+
 def test_scans_invalid_ticker_returns_400(client):
     response = client.get("/api/scans/TOOLONGTICKER")
     assert response.status_code == 400

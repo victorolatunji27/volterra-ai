@@ -1,15 +1,16 @@
 # Router for options scan endpoints — trigger, list, and retrieve daily scan results.
 from datetime import date, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from api.limiter import limiter
+from api.deps import get_current_user
+from api.limiter import limiter, user_or_ip_key
 from api.schemas import TICKER_PATTERN, AISummaryResponse, FlowScanResponse
 from db.database import get_db
-from db.models import AiSummary, FlowScan
+from db.models import AiSummary, FlowScan, UserProfile
 
 router = APIRouter(tags=["scans"])
 
@@ -41,6 +42,26 @@ def _to_response(scan: FlowScan, summary: AiSummary | None) -> FlowScanResponse:
     if summary is not None:
         response.summary = AISummaryResponse.model_validate(summary)
     return response
+
+
+@router.post("/trigger")
+@limiter.limit("3/hour", key_func=user_or_ip_key)
+async def trigger_scan(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    user: UserProfile = Depends(get_current_user),
+):
+    """Kick off a full scan immediately (authenticated, 3/hour per user).
+
+    The scan takes minutes (30 tickers + AI summaries), so it runs as a
+    background task and this returns as soon as it is scheduled.
+    """
+    # Lazy import: keeps the heavy scan pipeline (yfinance/pandas) out of the
+    # router's import path and makes the task easy to patch in tests.
+    from scheduler.daily_scan import run_daily_scan
+
+    background_tasks.add_task(run_daily_scan)
+    return {"status": "started"}
 
 
 @router.get("/today", response_model=list[FlowScanResponse])
