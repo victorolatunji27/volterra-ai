@@ -1,9 +1,15 @@
 "use client";
 // Auth — ported from the design's uploads/files/10-auth.html
 // (sign in / sign up / reset password as modes of one split-panel layout).
+//
+// Wired to Supabase when NEXT_PUBLIC_SUPABASE_URL/ANON_KEY are set; otherwise
+// runs in demo mode where flows simulate success. Sign-in honours ?next=
+// (set by middleware.ts when an unauthenticated user hits a protected route).
 import React, { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { LOSS } from "@/components/theme";
 import { useToast } from "@/components/toast";
+import { getSupabase } from "@/lib/supabase";
 
 const mono = "var(--mono)";
 type Mode = "signin" | "signup" | "reset";
@@ -80,23 +86,90 @@ const btn: React.CSSProperties = { width: "100%", cursor: "pointer", border: "no
 const btnGhost: React.CSSProperties = { width: "100%", cursor: "pointer", fontFamily: "inherit", fontSize: 14.5, fontWeight: 500, color: "var(--text)", background: "var(--surface)", border: "1px solid var(--border-2)", padding: 12, borderRadius: 8, display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 9 };
 const linkStyle: React.CSSProperties = { color: "var(--a1)", fontSize: 13, textDecoration: "none", fontWeight: 500, cursor: "pointer", background: "none", border: "none", fontFamily: "inherit", padding: 0 };
 
+const successBlock: React.CSSProperties = { display: "flex", gap: 11, background: "rgba(63,125,92,0.12)", border: "1px solid rgba(63,125,92,0.3)", borderRadius: 9, padding: "13px 15px", fontSize: 13.5, color: "#2f6b4a", lineHeight: 1.5, marginBottom: 22 };
+
+function SuccessCheck() {
+  return (
+    <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="#2f6b4a" strokeWidth={2} style={{ flexShrink: 0, marginTop: 1 }}>
+      <path d="M20 6L9 17l-5-5" />
+    </svg>
+  );
+}
+
 function AuthInner() {
   const router = useRouter();
   const params = useSearchParams();
   const { flash } = useToast();
-  const [mode, setMode] = useState<Mode>(params.get("mode") === "signup" ? "signup" : "signin");
+  const [mode, setModeState] = useState<Mode>(params.get("mode") === "signup" ? "signup" : "signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const [resetSent, setResetSent] = useState(false);
+  const [signupDone, setSignupDone] = useState(false);
   const copy = COPY[mode];
 
-  // Supabase auth wiring lands when the project is restored; for now the form
-  // signs you into the demo experience.
-  const submit = () => {
-    if (mode === "reset") {
-      setResetSent(true);
+  // Where to land after sign-in: the middleware sets ?next={path} when an
+  // unauthenticated user hits a protected route. Same-origin paths only.
+  const rawNext = params.get("next");
+  const nextPath = rawNext && rawNext.startsWith("/") && !rawNext.startsWith("//") ? rawNext : "/scan";
+
+  const setMode = (m: Mode) => {
+    setModeState(m);
+    setError(null);
+    setResetSent(false);
+    setSignupDone(false);
+  };
+
+  const submit = async () => {
+    if (busy) return;
+    setError(null);
+    const supabase = getSupabase();
+
+    if (mode === "signin") {
+      if (!supabase) {
+        // Demo mode — no Supabase project configured.
+        flash("Signed in (demo)");
+        router.push(nextPath);
+        return;
+      }
+      setBusy(true);
+      const { error: err } = await supabase.auth.signInWithPassword({ email, password });
+      setBusy(false);
+      if (err) {
+        setError(err.message);
+        return;
+      }
+      router.push(nextPath);
       return;
     }
-    flash(mode === "signup" ? "Account created — welcome to VolterraAI" : "Signed in");
-    router.push("/scan");
+
+    if (mode === "signup") {
+      if (!supabase) {
+        setSignupDone(true);
+        return;
+      }
+      setBusy(true);
+      const { error: err } = await supabase.auth.signUp({ email, password });
+      setBusy(false);
+      if (err) {
+        setError(err.message);
+        return;
+      }
+      // No redirect, no form clear — just swap the submit area for the notice.
+      setSignupDone(true);
+      return;
+    }
+
+    // reset
+    if (supabase) {
+      setBusy(true);
+      // Deliberately ignore errors: the confirmation copy is noncommittal so
+      // the form can't be used to probe which emails have accounts.
+      await supabase.auth.resetPasswordForEmail(email).catch(() => undefined);
+      setBusy(false);
+    }
+    setResetSent(true);
   };
 
   return (
@@ -132,68 +205,86 @@ function AuthInner() {
           <p style={{ fontSize: 14.5, color: "var(--text-2)", margin: "9px 0 28px", lineHeight: 1.5 }}>{copy.sub}</p>
 
           {mode === "reset" && resetSent ? (
-            <div style={{ display: "flex", gap: 11, background: "rgba(63,125,92,0.12)", border: "1px solid rgba(63,125,92,0.3)", borderRadius: 9, padding: "13px 15px", fontSize: 13.5, color: "#2f6b4a", lineHeight: 1.5, marginBottom: 22 }}>
-              <svg width={18} height={18} viewBox="0 0 24 24" fill="none" stroke="#2f6b4a" strokeWidth={2} style={{ flexShrink: 0, marginTop: 1 }}>
-                <path d="M20 6L9 17l-5-5" />
-              </svg>
-              <div>If an account exists for that email, a reset link is on its way. Check your inbox.</div>
-            </div>
-          ) : null}
-
-          <div style={{ marginBottom: 16 }}>
-            <label style={label} htmlFor="auth-email">Email</label>
-            <input id="auth-email" type="email" placeholder="you@email.com" style={inputStyle} />
-          </div>
-          {mode !== "reset" ? (
-            <div style={{ marginBottom: 16 }}>
-              <label style={label} htmlFor="auth-pw">Password</label>
-              <input id="auth-pw" type="password" placeholder={mode === "signup" ? "At least 8 characters" : "••••••••"} style={inputStyle} />
-            </div>
-          ) : null}
-
-          {mode === "signin" ? (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "-4px 0 20px" }}>
-              <span />
-              <button style={linkStyle} onClick={() => { setMode("reset"); setResetSent(false); }}>Forgot password?</button>
-            </div>
-          ) : null}
-
-          <button style={btn} onClick={submit}>
-            {mode === "signin" ? "Sign in" : mode === "signup" ? "Create account" : "Send reset link"}
-          </button>
-
-          {mode === "signin" ? (
+            /* Reset confirmation — replaces the form entirely. */
             <>
-              <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "18px 0", color: "var(--text-3)", fontSize: 12 }}>
-                <span style={{ flex: 1, height: 1, background: "var(--border)" }} />or<span style={{ flex: 1, height: 1, background: "var(--border)" }} />
+              <div style={successBlock}>
+                <SuccessCheck />
+                <div>If an account exists for that email, a reset link is on its way. Check your inbox.</div>
               </div>
-              <button style={btnGhost} onClick={() => flash("Google sign-in coming soon")}>
-                <svg width={16} height={16} viewBox="0 0 24 24" aria-hidden="true">
-                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z" />
-                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z" />
-                  <path fill="#FBBC05" d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88z" />
-                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.06l3.66 2.84C6.71 7.3 9.14 5.38 12 5.38z" />
-                </svg>
-                Continue with Google
-              </button>
+              <div style={{ marginTop: 24, fontSize: 13.5, color: "var(--text-2)", textAlign: "center" }}>
+                <button style={linkStyle} onClick={() => setMode("signin")}>← Back to sign in</button>
+              </div>
             </>
-          ) : null}
+          ) : (
+            <>
+              <div style={{ marginBottom: 16 }}>
+                <label style={label} htmlFor="auth-email">Email</label>
+                <input id="auth-email" type="email" placeholder="you@email.com" style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} />
+              </div>
+              {mode !== "reset" ? (
+                <div style={{ marginBottom: 16 }}>
+                  <label style={label} htmlFor="auth-pw">Password</label>
+                  <input id="auth-pw" type="password" placeholder={mode === "signup" ? "At least 8 characters" : "••••••••"} style={inputStyle} value={password} onChange={(e) => setPassword(e.target.value)} />
+                </div>
+              ) : null}
 
-          {mode === "signup" ? (
-            <p style={{ fontSize: 12.5, color: "var(--text-3)", marginTop: 14, textAlign: "center", lineHeight: 1.5 }}>
-              By creating an account you agree to the Terms and Privacy Policy. VolterraAI is for research and education, not investment advice.
-            </p>
-          ) : null}
+              {mode === "signin" ? (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", margin: "-4px 0 20px" }}>
+                  <span />
+                  <button style={linkStyle} onClick={() => setMode("reset")}>Forgot password?</button>
+                </div>
+              ) : null}
 
-          <div style={{ marginTop: 24, fontSize: 13.5, color: "var(--text-2)", textAlign: "center" }}>
-            {mode === "signin" ? (
-              <>New to VolterraAI? <button style={linkStyle} onClick={() => setMode("signup")}>Create an account</button></>
-            ) : mode === "signup" ? (
-              <>Already have an account? <button style={linkStyle} onClick={() => setMode("signin")}>Sign in</button></>
-            ) : (
-              <button style={linkStyle} onClick={() => setMode("signin")}>← Back to sign in</button>
-            )}
-          </div>
+              {error ? (
+                <div style={{ fontSize: 13, color: LOSS, lineHeight: 1.45, margin: "0 0 14px" }}>{error}</div>
+              ) : null}
+
+              {mode === "signup" && signupDone ? (
+                /* Sign-up confirmation — replaces the submit button area only. */
+                <div style={{ ...successBlock, marginBottom: 0 }}>
+                  <SuccessCheck />
+                  <div>Check your inbox to confirm your email before signing in.</div>
+                </div>
+              ) : (
+                <button style={{ ...btn, opacity: busy ? 0.7 : 1 }} onClick={submit} disabled={busy}>
+                  {busy ? "…" : mode === "signin" ? "Sign in" : mode === "signup" ? "Create account" : "Send reset link"}
+                </button>
+              )}
+
+              {mode === "signin" ? (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: 12, margin: "18px 0", color: "var(--text-3)", fontSize: 12 }}>
+                    <span style={{ flex: 1, height: 1, background: "var(--border)" }} />or<span style={{ flex: 1, height: 1, background: "var(--border)" }} />
+                  </div>
+                  <button style={btnGhost} onClick={() => flash("Google sign-in coming soon")}>
+                    <svg width={16} height={16} viewBox="0 0 24 24" aria-hidden="true">
+                      <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.27-4.74 3.27-8.1z" />
+                      <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84A11 11 0 0 0 12 23z" />
+                      <path fill="#FBBC05" d="M5.84 14.1a6.6 6.6 0 0 1 0-4.2V7.06H2.18a11 11 0 0 0 0 9.88z" />
+                      <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1A11 11 0 0 0 2.18 7.06l3.66 2.84C6.71 7.3 9.14 5.38 12 5.38z" />
+                    </svg>
+                    Continue with Google
+                  </button>
+                </>
+              ) : null}
+
+              {mode === "signup" && !signupDone ? (
+                <p style={{ fontSize: 12.5, color: "var(--text-3)", marginTop: 14, textAlign: "center", lineHeight: 1.5 }}>
+                  By creating an account you agree to the Terms and Privacy Policy. VolterraAI is for research and education, not investment advice.
+                </p>
+              ) : null}
+
+              <div style={{ marginTop: 24, fontSize: 13.5, color: "var(--text-2)", textAlign: "center" }}>
+                {mode === "signin" ? (
+                  <>New to VolterraAI? <button style={linkStyle} onClick={() => setMode("signup")}>Create an account</button></>
+                ) : mode === "signup" ? (
+                  <>Already have an account? <button style={linkStyle} onClick={() => setMode("signin")}>Sign in</button></>
+                ) : (
+                  <button style={linkStyle} onClick={() => setMode("signin")}>← Back to sign in</button>
+                )}
+              </div>
+            </>
+          )}
         </div>
       </div>
     </section>
