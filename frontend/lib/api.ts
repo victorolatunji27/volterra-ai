@@ -362,6 +362,11 @@ export function fetchMe(): Promise<Me | null> {
   return mePromise;
 }
 
+/** Drop the memoized /me — call after anything that mutates the profile. */
+export function invalidateMe(): void {
+  mePromise = null;
+}
+
 // ---------------------------------------------------------------------------
 // Strategy preferences
 // ---------------------------------------------------------------------------
@@ -373,7 +378,11 @@ const CHIP_TO_API: Record<string, string> = {
 
 export async function saveStrategyPrefs(chips: string[]): Promise<boolean> {
   const strategy_tags = chips.map((c) => CHIP_TO_API[c]).filter(Boolean);
-  return apiSend("/api/users/me/strategies", "PATCH", { strategy_tags });
+  const ok = await apiSend("/api/users/me/strategies", "PATCH", { strategy_tags });
+  // The memoized /me now has stale strategy_tags — drop it so the alerts
+  // first-run check re-reads the truth next time.
+  if (ok) invalidateMe();
+  return ok;
 }
 
 export { LOSS, WIN, WARN };
