@@ -1,19 +1,47 @@
 "use client";
 // Settings — account card + appearance (theme and accent direction).
-import React from "react";
+// The account card reads live tier/email/member-since from /api/users/me,
+// keeping the design's illustrative values in demo mode.
+import React, { useEffect, useState } from "react";
 import { ACCENTS, AccentKey, useTheme } from "@/components/theme";
 import { useToast } from "@/components/toast";
+import { fetchMe, Me } from "@/lib/api";
 import { useWidth } from "@/lib/useWidth";
 
 const mono = "var(--mono)";
 const card: React.CSSProperties = { borderRadius: 9, border: "1px solid var(--border)", background: "var(--surface)", padding: 24, boxShadow: "var(--shadow)" };
 
-const ACCOUNT_ROWS: [string, string][] = [
-  ["Email", "alex.rivera@gmail.com"],
-  ["Subscription tier", "Pro · $29/mo"],
-  ["Member since", "March 2025"],
-  ["Next billing", "Jul 1, 2026"],
-];
+// Illustrative account (design values) shown in demo mode / unauthenticated.
+const DEMO_ACCOUNT = {
+  name: "Alex Rivera",
+  subtitle: "Pro plan · active",
+  rows: [
+    ["Email", "alex.rivera@gmail.com"],
+    ["Subscription tier", "Pro · $29/mo"],
+    ["Member since", "March 2025"],
+    ["Next billing", "Jul 1, 2026"],
+  ] as [string, string][],
+};
+
+function accountFromMe(me: Me) {
+  const isPro = me.tier === "pro";
+  const created = Date.parse(me.created_at);
+  const memberSince = Number.isFinite(created)
+    ? new Date(created).toLocaleDateString("en-US", { month: "long", year: "numeric" })
+    : "—";
+  return {
+    // The API has no display-name field — use the email's local part.
+    name: me.email.split("@")[0],
+    subtitle: isPro ? "Pro plan · active" : "Free plan",
+    rows: [
+      ["Email", me.email],
+      // No billing fields on the backend yet — the price is display copy.
+      ["Subscription tier", isPro ? "Pro · $29/mo" : "Free"],
+      ["Member since", memberSince],
+      ["Next billing", isPro ? "Jul 1, 2026" : "—"],
+    ] as [string, string][],
+  };
+}
 
 const ACCENT_LABELS: [AccentKey, string][] = [["aurora", "Ember"], ["oceanic", "Pine"], ["cosmic", "Aubergine"]];
 
@@ -22,6 +50,15 @@ export default function SettingsPage() {
   const { flash } = useToast();
   const w = useWidth();
   const narrow = w < 900;
+  const [account, setAccount] = useState(DEMO_ACCOUNT);
+
+  useEffect(() => {
+    let alive = true;
+    fetchMe().then((me) => {
+      if (alive && me) setAccount(accountFromMe(me));
+    });
+    return () => { alive = false; };
+  }, []);
 
   return (
     <>
@@ -34,14 +71,16 @@ export default function SettingsPage() {
         <div id="billing" style={card}>
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 18 }}>Account</div>
           <div style={{ display: "flex", alignItems: "center", gap: 14, paddingBottom: 20, marginBottom: 6, borderBottom: "1px solid var(--border)" }}>
-            <div style={{ width: 48, height: 48, borderRadius: "50%", background: "linear-gradient(135deg,var(--a1),var(--a3))", display: "grid", placeItems: "center", fontSize: 18, fontWeight: 600, color: "#faf6ee" }}>A</div>
+            <div style={{ width: 48, height: 48, borderRadius: "50%", background: "linear-gradient(135deg,var(--a1),var(--a3))", display: "grid", placeItems: "center", fontSize: 18, fontWeight: 600, color: "#faf6ee" }}>
+              {account.name.charAt(0).toUpperCase()}
+            </div>
             <div>
-              <div style={{ fontSize: 15, fontWeight: 600 }}>Alex Rivera</div>
-              <div style={{ fontSize: 13, color: "var(--text-3)" }}>Pro plan · active</div>
+              <div style={{ fontSize: 15, fontWeight: 600 }}>{account.name}</div>
+              <div style={{ fontSize: 13, color: "var(--text-3)" }}>{account.subtitle}</div>
             </div>
           </div>
           <div style={{ display: "flex", flexDirection: "column" }}>
-            {ACCOUNT_ROWS.map((r, i) => (
+            {account.rows.map((r, i) => (
               <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 0", borderTop: i > 0 ? "1px solid var(--border)" : "none" }}>
                 <span style={{ fontSize: 13.5, color: "var(--text-3)" }}>{r[0]}</span>
                 <span style={{ fontSize: 13.5, fontWeight: 500, fontFamily: r[1].indexOf("@") > 0 || /\d/.test(r[1]) ? mono : "inherit" }}>{r[1]}</span>
