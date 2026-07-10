@@ -65,7 +65,7 @@ async def trigger_scan(
 
 
 @router.get("/today", response_model=list[FlowScanResponse])
-@limiter.limit("60/minute")
+@limiter.limit("10/minute")
 async def get_todays_scans(request: Request, db: AsyncSession = Depends(get_db)):
     """Today's top 10 flow scans, each with its AI summary joined in."""
     scans = (

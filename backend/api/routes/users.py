@@ -31,7 +31,7 @@ async def get_me(request: Request, user: UserProfile = Depends(get_current_user)
 
 
 @router.patch("/me/strategies", response_model=list[str])
-@limiter.limit("30/minute", key_func=user_or_ip_key)
+@limiter.limit("10/minute", key_func=user_or_ip_key)
 async def update_my_strategies(
     request: Request,
     body: UpdateStrategyTagsRequest,

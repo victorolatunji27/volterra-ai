@@ -302,6 +302,22 @@ def test_trigger_scan_requires_auth(client):
     assert client.post("/api/scans/trigger").status_code == 401
 
 
+def test_rate_limit_429_shape(client):
+    # /api/scans/today allows 10/minute per IP; the 11th call within the
+    # window must 429 with the standard {"detail": ...} error shape.
+    app.dependency_overrides[get_db] = _db_returning(
+        *[_FakeResult(all=[]) for _ in range(11)]
+    )
+    last = None
+    for _ in range(11):
+        last = client.get("/api/scans/today")
+        if last.status_code == 429:
+            break
+    assert last is not None and last.status_code == 429
+    assert last.json()["detail"].startswith("Rate limit exceeded. Try again in")
+    assert "Retry-After" in last.headers
+
+
 def test_trigger_scan_starts_background_scan(client):
     app.dependency_overrides[get_current_user] = _fake_user
     with patch("scheduler.daily_scan.run_daily_scan", new=AsyncMock(return_value=[])) as scan:

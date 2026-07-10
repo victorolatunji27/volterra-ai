@@ -105,7 +105,7 @@ def _win_rate(wins: int, resolved: int) -> float:
 # ---------------------------------------------------------------------------
 
 @router.get("/summary", response_model=AnalyticsSummaryResponse)
-@limiter.limit("30/minute", key_func=user_or_ip_key)
+@limiter.limit("20/minute", key_func=user_or_ip_key)
 async def get_summary(
     request: Request,
     user: UserProfile = Depends(get_current_user),
@@ -183,7 +183,7 @@ async def get_summary(
 
 
 @router.get("/by-strategy", response_model=list[StrategyBreakdown])
-@limiter.limit("30/minute", key_func=user_or_ip_key)
+@limiter.limit("20/minute", key_func=user_or_ip_key)
 async def get_by_strategy(
     request: Request,
     user: UserProfile = Depends(get_current_user),
@@ -222,7 +222,7 @@ async def get_by_strategy(
 
 
 @router.get("/by-ticker", response_model=list[TickerBreakdown])
-@limiter.limit("30/minute", key_func=user_or_ip_key)
+@limiter.limit("20/minute", key_func=user_or_ip_key)
 async def get_by_ticker(
     request: Request,
     user: UserProfile = Depends(get_current_user),
@@ -260,7 +260,7 @@ async def get_by_ticker(
 
 
 @router.get("/weekly-review")
-@limiter.limit("30/minute", key_func=user_or_ip_key)
+@limiter.limit("20/minute", key_func=user_or_ip_key)
 async def get_weekly_review(
     request: Request,
     user: UserProfile = Depends(get_current_user),
@@ -277,7 +277,7 @@ async def get_weekly_review(
 
 
 @router.get("/equity-curve", response_model=list[EquityPoint])
-@limiter.limit("30/minute", key_func=user_or_ip_key)
+@limiter.limit("20/minute", key_func=user_or_ip_key)
 async def get_equity_curve(
     request: Request,
     user: UserProfile = Depends(get_current_user),

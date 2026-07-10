@@ -69,10 +69,11 @@ app.add_middleware(SlowAPIMiddleware)
 
 @app.exception_handler(RateLimitExceeded)
 async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    # Same JSON shape as FastAPI's other errors ({"detail": ...}).
     retry_after = int(exc.headers.get("Retry-After", 60)) if exc.headers else 60
     return JSONResponse(
         status_code=429,
-        content={"error": "rate limit exceeded", "retry_after": retry_after},
+        content={"detail": f"Rate limit exceeded. Try again in {retry_after}s."},
         headers={"Retry-After": str(retry_after)},
     )
 

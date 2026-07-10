@@ -93,12 +93,23 @@ ENABLE_SCHEDULER=false python -m pytest tests/ -v
 
 | Endpoint | Limit | Keyed by |
 |---|---|---|
-| `GET /api/scans/today`, `GET /api/scans/{ticker}` | 60/minute | IP |
-| `POST /api/journal` | 10/minute | JWT user id (falls back to IP) |
+| `GET /api/scans/today` | 10/minute | IP |
+| `POST /api/scans/trigger` | 3/hour | JWT user id (falls back to IP) |
+| `GET /api/scans/{ticker}`, `GET /api/scans/{ticker}/summary` | 60/minute | IP |
+| `GET /api/demo/setup` | 60/minute | IP (public) |
+| `POST /api/journal` | 30/minute | JWT user id (falls back to IP) |
+| `GET /api/analytics/*` (all five) | 20/minute | JWT user id (falls back to IP) |
+| `PATCH /api/users/me/strategies` | 10/minute | JWT user id (falls back to IP) |
 | `POST /api/users/me/test-alert` | 3/day | JWT user id |
-| All other routes | 30/minute | IP |
+| All other routes | 30/minute | default (IP) |
 
-Exceeding a limit returns `429` with JSON `{"error": "rate limit exceeded", "retry_after": N}`.
+Authenticated routes key on the verified Supabase user id so users sharing a
+NAT don't block each other; the JWT signature is checked before the `sub`
+claim is trusted (an unverifiable token falls back to the client IP).
+
+Exceeding a limit returns `429` with JSON
+`{"detail": "Rate limit exceeded. Try again in {retry_after}s."}` and a
+`Retry-After` header.
 
 ## Architecture decisions and tradeoffs
 

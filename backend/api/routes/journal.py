@@ -87,7 +87,7 @@ async def _summary_for(db: AsyncSession, entry: JournalEntry) -> AiSummary | Non
 # ---------------------------------------------------------------------------
 
 @router.post("", response_model=JournalEntryResponse, status_code=201)
-@limiter.limit("10/minute", key_func=user_or_ip_key)
+@limiter.limit("30/minute", key_func=user_or_ip_key)
 async def create_journal_entry(
     request: Request,
     body: CreateJournalEntryRequest,
