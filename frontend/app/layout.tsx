@@ -3,6 +3,7 @@ import { Archivo, Newsreader, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/context/ThemeContext";
 import { ToastProvider } from "@/components/toast";
+import PostHogTracker from "@/components/PostHogTracker";
 
 const archivo = Archivo({
   subsets: ["latin"],
@@ -47,6 +48,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="en" suppressHydrationWarning>
       <body className={`${archivo.variable} ${newsreader.variable} ${plexMono.variable}`}>
         <script dangerouslySetInnerHTML={{ __html: themeInitScript }} />
+        <PostHogTracker />
         <ThemeProvider>
           <ToastProvider>{children}</ToastProvider>
         </ThemeProvider>

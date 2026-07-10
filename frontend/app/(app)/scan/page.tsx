@@ -8,6 +8,7 @@ import EmptyState, { ClockIcon } from "@/components/EmptyState";
 import SetupCard from "@/components/SetupCard";
 import { useToast } from "@/components/toast";
 import { apiSend, fetchSetups } from "@/lib/api";
+import { track } from "@/lib/posthog";
 import { DEMO_SETUPS, Setup } from "@/lib/demo";
 import { useWidth } from "@/lib/useWidth";
 
@@ -92,6 +93,7 @@ export default function ScanPage() {
 
   const rescan = () => {
     if (scanning) return;
+    track("rescan_triggered");
     // Kick the real scan off server-side (auth required; best-effort in demo
     // mode), then re-check for results after the skeleton animation.
     apiSend("/api/scans/trigger", "POST").then((ok) => {

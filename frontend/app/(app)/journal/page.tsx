@@ -7,6 +7,7 @@ import { useToast } from "@/components/toast";
 import { ICONS, svgIcon } from "@/components/icons";
 import EmptyState, { BookmarkIcon } from "@/components/EmptyState";
 import { fetchJournal, apiSend } from "@/lib/api";
+import { track } from "@/lib/posthog";
 import { DEMO_JOURNAL, JournalRow } from "@/lib/demo";
 import { useWidth } from "@/lib/useWidth";
 
@@ -56,7 +57,11 @@ export default function JournalPage() {
   ];
 
   const resolveTrade = (d: JournalRow) => {
-    if (d.id) apiSend(`/api/journal/${d.id}`, "PATCH", { outcome: "win", outcome_pnl_pct: d.pnl });
+    if (d.id) {
+      apiSend(`/api/journal/${d.id}`, "PATCH", { outcome: "win", outcome_pnl_pct: d.pnl }).then(
+        (ok) => { if (ok) track("outcome_marked", { ticker: d.t, outcome: "win", pnl_pct: d.pnl }); }
+      );
+    }
     flash(`${d.t} marked resolved`);
   };
 

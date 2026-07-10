@@ -9,6 +9,7 @@
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/api";
+import { track } from "@/lib/posthog";
 
 const DISMISS_PREFIX = "vt-paywall-dismissed:";
 const TRIAL_DAYS = 30;
@@ -36,7 +37,10 @@ export default function PaywallGate({
       const trialEnded =
         Number.isFinite(created) &&
         Date.now() - created > TRIAL_DAYS * 24 * 60 * 60 * 1000;
-      if (trialEnded) setGated(true);
+      if (trialEnded) {
+        setGated(true);
+        track("upgrade_prompt_shown", { feature });
+      }
     });
     return () => {
       alive = false;

@@ -7,6 +7,7 @@ import { Spark } from "@/components/charts";
 import { useToast } from "@/components/toast";
 import { tagFor } from "@/lib/tags";
 import { apiSend } from "@/lib/api";
+import { track } from "@/lib/posthog";
 import type { Setup } from "@/lib/demo";
 
 const mono = "var(--mono)";
@@ -28,7 +29,9 @@ export default function SetupCard({ s }: { s: Setup }) {
 
   const save = async () => {
     // Best-effort API save; the toast fires either way (demo parity).
-    apiSend("/api/journal", "POST", { ticker: s.t, ai_summary_id: s.summaryId ?? null });
+    apiSend("/api/journal", "POST", { ticker: s.t, ai_summary_id: s.summaryId ?? null }).then(
+      (ok) => { if (ok) track("setup_saved", { ticker: s.t, strategy_tag: s.tag }); }
+    );
     flash(`${s.t} saved to your journal`);
   };
 

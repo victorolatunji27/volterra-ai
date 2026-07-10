@@ -9,6 +9,8 @@ import React, { Suspense, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { LOSS } from "@/components/theme";
 import { useToast } from "@/components/toast";
+import { fetchMe, invalidateMe } from "@/lib/api";
+import { identifyUser } from "@/lib/posthog";
 import { getSupabase } from "@/lib/supabase";
 
 const mono = "var(--mono)";
@@ -134,11 +136,21 @@ function AuthInner() {
         return;
       }
       setBusy(true);
-      const { error: err } = await supabase.auth.signInWithPassword({ email, password });
+      const { data, error: err } = await supabase.auth.signInWithPassword({ email, password });
       setBusy(false);
       if (err) {
         setError(err.message);
         return;
+      }
+      if (data.user) {
+        // Identify immediately with what Supabase gives us, then enrich with
+        // the tier from /api/users/me without blocking navigation.
+        const user = data.user;
+        identifyUser(user.id, { email: user.email });
+        invalidateMe();
+        fetchMe().then((me) => {
+          if (me) identifyUser(user.id, { email: me.email, tier: me.tier });
+        });
       }
       router.push(nextPath);
       return;

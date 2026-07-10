@@ -8,6 +8,7 @@ import { Area } from "@/components/charts";
 import { useToast } from "@/components/toast";
 import { tagFor } from "@/lib/tags";
 import { apiSend, fetchTicker, TickerDetail } from "@/lib/api";
+import { track } from "@/lib/posthog";
 import {
   DEMO_AI_BLOCKS, DEMO_NEWS_FULL, DEMO_NEWS_TEASER,
   DEMO_HISTORY_WEEKS, DEMO_HISTORY_ROWS, DEMO_SETUPS, DEMO_TICKER_SERIES,
@@ -263,7 +264,9 @@ export default function TickerPage() {
   const blocks = detail.aiBlocks ?? DEMO_AI_BLOCKS;
 
   const save = () => {
-    apiSend("/api/journal", "POST", { ticker: symbol, ai_summary_id: s.summaryId ?? null });
+    apiSend("/api/journal", "POST", { ticker: symbol, ai_summary_id: s.summaryId ?? null }).then(
+      (ok) => { if (ok) track("setup_saved", { ticker: symbol, strategy_tag: s.tag }); }
+    );
     flash(`${symbol} saved to your journal`);
   };
 

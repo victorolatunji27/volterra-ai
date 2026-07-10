@@ -5,6 +5,7 @@ import React, { useEffect, useState } from "react";
 import PaywallGate from "@/components/PaywallGate";
 import { useToast } from "@/components/toast";
 import { fetchMe, saveStrategyPrefs } from "@/lib/api";
+import { track } from "@/lib/posthog";
 import { useWidth } from "@/lib/useWidth";
 
 const card: React.CSSProperties = { borderRadius: 9, border: "1px solid var(--border)", background: "var(--surface)", padding: 24, boxShadow: "var(--shadow)" };
@@ -83,6 +84,7 @@ export default function AlertsPage() {
   const saveFirstRun = () => {
     // Best-effort in demo mode; the UI transitions either way.
     saveStrategyPrefs(firstRunSelected);
+    track("strategy_preferences_saved", { tags: firstRunSelected });
     setStrategies(firstRunSelected);
     setPhase("normal");
     flash("Preferences saved");
