@@ -1,10 +1,10 @@
 # Pydantic request/response models for every API endpoint.
 import re
 from datetime import date, datetime
-from typing import Optional
+from typing import Literal, Optional
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from strategies import STRATEGY_TAG_SET
 
@@ -14,6 +14,13 @@ ALLOWED_OUTCOMES = {"win", "loss", "scratch", "pending"}
 
 # Shared taxonomy — see strategies.py (single source of truth).
 ALLOWED_STRATEGY_TAGS = STRATEGY_TAG_SET
+
+# Literal forms for request bodies: invalid values 422 at the model boundary.
+# Keep in sync with strategies.STRATEGY_TAGS.
+StrategyTag = Literal[
+    "momentum", "earnings_play", "iv_crush", "breakout", "hedge", "contrarian", "neutral",
+]
+Outcome = Literal["win", "loss", "scratch", "pending"]
 
 
 # ---------------------------------------------------------------------------
@@ -80,43 +87,22 @@ class UserProfileResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class CreateJournalEntryRequest(BaseModel):
-    ticker: str
-    ai_summary_id: Optional[int] = None
-    user_notes: Optional[str] = None
-    entry_price: Optional[float] = None
-    strategy_type: Optional[str] = None
+    # extra="forbid": unknown body keys 422 instead of being silently dropped.
+    model_config = ConfigDict(extra="forbid")
+
+    ticker: str = Field(min_length=1, max_length=10, pattern=r"^[A-Z]{1,10}$")
+    ai_summary_id: Optional[int] = Field(None, ge=1)
+    entry_price: Optional[float] = Field(None, gt=0, lt=1_000_000)
+    outcome_pnl_pct: Optional[float] = Field(None, ge=-100, le=10_000)
+    strategy_type: Optional[StrategyTag] = None
     expiry_date: Optional[date] = None
+    user_notes: Optional[str] = Field(None, max_length=2000)
 
-    @field_validator("ticker")
+    @field_validator("ticker", mode="before")
     @classmethod
-    def validate_ticker(cls, v: str) -> str:
-        v = v.strip().upper()
-        if not TICKER_PATTERN.match(v):
-            raise ValueError("ticker must be 1-5 uppercase letters (A-Z)")
-        return v
-
-    @field_validator("user_notes")
-    @classmethod
-    def validate_user_notes(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and len(v) > 2000:
-            raise ValueError("user_notes must be at most 2000 characters")
-        return v
-
-    @field_validator("entry_price")
-    @classmethod
-    def validate_entry_price(cls, v: Optional[float]) -> Optional[float]:
-        if v is not None and not (0.01 <= v <= 1_000_000):
-            raise ValueError("entry_price must be between 0.01 and 1000000")
-        return v
-
-    @field_validator("strategy_type")
-    @classmethod
-    def validate_strategy_type(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and v not in ALLOWED_STRATEGY_TAGS:
-            raise ValueError(
-                f"strategy_type must be one of: {', '.join(sorted(ALLOWED_STRATEGY_TAGS))}"
-            )
-        return v
+    def normalise_ticker(cls, v: object) -> object:
+        # Normalise before the pattern check so "aapl " is accepted as "AAPL".
+        return v.strip().upper() if isinstance(v, str) else v
 
 
 class UpdateJournalEntryRequest(BaseModel):
@@ -125,56 +111,17 @@ class UpdateJournalEntryRequest(BaseModel):
     Use exclude_unset when consuming so an omitted field is left unchanged
     while an explicit null clears it.
     """
-    user_notes: Optional[str] = None
-    entry_price: Optional[float] = None
-    strategy_type: Optional[str] = None
+    model_config = ConfigDict(extra="forbid")
+
+    user_notes: Optional[str] = Field(None, max_length=2000)
+    entry_price: Optional[float] = Field(None, gt=0, lt=1_000_000)
+    strategy_type: Optional[StrategyTag] = None
     expiry_date: Optional[date] = None
-    outcome: Optional[str] = None
-    outcome_pnl_pct: Optional[float] = None
-
-    @field_validator("user_notes")
-    @classmethod
-    def validate_user_notes(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and len(v) > 2000:
-            raise ValueError("user_notes must be at most 2000 characters")
-        return v
-
-    @field_validator("entry_price")
-    @classmethod
-    def validate_entry_price(cls, v: Optional[float]) -> Optional[float]:
-        if v is not None and not (0.01 <= v <= 1_000_000):
-            raise ValueError("entry_price must be between 0.01 and 1000000")
-        return v
-
-    @field_validator("strategy_type")
-    @classmethod
-    def validate_strategy_type(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and v not in ALLOWED_STRATEGY_TAGS:
-            raise ValueError(
-                f"strategy_type must be one of: {', '.join(sorted(ALLOWED_STRATEGY_TAGS))}"
-            )
-        return v
-
-    @field_validator("outcome")
-    @classmethod
-    def validate_outcome(cls, v: Optional[str]) -> Optional[str]:
-        if v is not None and v not in ALLOWED_OUTCOMES:
-            raise ValueError(
-                f"outcome must be one of: {', '.join(sorted(ALLOWED_OUTCOMES))}"
-            )
-        return v
+    outcome: Optional[Outcome] = None
+    outcome_pnl_pct: Optional[float] = Field(None, ge=-100, le=10_000)
 
 
 class UpdateStrategyTagsRequest(BaseModel):
-    strategy_tags: list[str]
+    model_config = ConfigDict(extra="forbid")
 
-    @field_validator("strategy_tags")
-    @classmethod
-    def validate_tags(cls, v: list[str]) -> list[str]:
-        invalid = [tag for tag in v if tag not in ALLOWED_STRATEGY_TAGS]
-        if invalid:
-            raise ValueError(
-                f"invalid strategy tags: {invalid}. "
-                f"Allowed: {', '.join(sorted(ALLOWED_STRATEGY_TAGS))}"
-            )
-        return v
+    strategy_tags: list[StrategyTag] = Field(max_length=7)

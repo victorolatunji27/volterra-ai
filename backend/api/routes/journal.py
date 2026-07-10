@@ -113,6 +113,7 @@ async def create_journal_entry(
         strategy_type=body.strategy_type,
         expiry_date=body.expiry_date,
         outcome="pending",
+        outcome_pnl_pct=body.outcome_pnl_pct,
     )
     db.add(entry)
     await db.flush()

@@ -217,6 +217,44 @@ def test_update_journal_invalid_outcome_returns_422(authed_client):
     assert response.status_code == 422
 
 
+def test_create_journal_unknown_field_returns_422(authed_client):
+    # extra="forbid": unknown body keys are rejected, not silently dropped
+    response = authed_client.post(
+        "/api/journal", json={"ticker": "AAPL", "is_admin": True}
+    )
+    assert response.status_code == 422
+
+
+def test_create_journal_pnl_out_of_bounds_returns_422(authed_client):
+    response = authed_client.post(
+        "/api/journal", json={"ticker": "AAPL", "outcome_pnl_pct": -150}
+    )
+    assert response.status_code == 422
+
+
+def test_update_strategies_rejects_more_than_seven_tags(authed_client):
+    response = authed_client.patch(
+        "/api/users/me/strategies", json={"strategy_tags": ["momentum"] * 8}
+    )
+    assert response.status_code == 422
+
+
+def test_unhandled_exception_returns_detail_shape_and_captures(client):
+    # A DB blow-up must return the generic detail payload (no stack trace)
+    # and be captured to Sentry explicitly.
+    class _ExplodingDB:
+        async def execute(self, *a, **k):
+            raise RuntimeError("secret internal state")
+
+    app.dependency_overrides[get_db] = lambda: _ExplodingDB()
+    with patch("main.sentry_sdk.capture_exception") as capture:
+        response = client.get("/api/scans/AAPL")
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Internal server error"}
+    assert "secret internal state" not in response.text
+    capture.assert_called_once()
+
+
 def _fake_journal_entry(user_id, **overrides):
     entry = SimpleNamespace(
         id=1, user_id=user_id, ticker="AAPL", ai_summary_id=None,

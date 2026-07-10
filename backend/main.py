@@ -82,13 +82,21 @@ async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled exception on %s %s", request.method, request.url.path)
-    return JSONResponse(status_code=500, content={"error": "Internal server error"})
+    # A custom handler swallows the exception before Sentry's ASGI integration
+    # sees it, so capture explicitly. No-op when Sentry isn't initialized.
+    sentry_sdk.capture_exception(exc)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 # ── CORS ─────────────────────────────────────────────────────────────────────
+# Only local dev and the production site; ALLOWED_ORIGINS overrides for other
+# deployments (e.g. a Vercel preview URL) without a code change.
+DEFAULT_ALLOWED_ORIGINS = (
+    "http://localhost:3000,https://volterraai.com,https://www.volterraai.com"
+)
 allowed_origins = [
     origin.strip()
-    for origin in os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+    for origin in os.getenv("ALLOWED_ORIGINS", DEFAULT_ALLOWED_ORIGINS).split(",")
     if origin.strip()
 ]
 app.add_middleware(
