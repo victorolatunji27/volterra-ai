@@ -4,6 +4,8 @@
 // Each fetcher tries the FastAPI backend (NEXT_PUBLIC_API_URL); on any
 // network error, non-2xx, or empty payload it returns the design's
 // illustrative demo data with { demo: true } so callers can tell.
+import * as Sentry from "@sentry/nextjs";
+
 import {
   DEMO_SETUPS, DEMO_JOURNAL, DEMO_TICKER_SERIES, DEMO_EQUITY,
   DEMO_STRATEGY_PERF, DEMO_TICKER_PERF, DEMO_ANALYTICS_OVERVIEW,
@@ -42,14 +44,18 @@ async function apiGet<T>(path: string): Promise<T | null> {
       signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: authHeaders(),
     });
-  } catch {
+  } catch (err) {
+    // Captured (no-op without a DSN) but NOT rethrown: callers rely on the
+    // null return to fall back to demo data when the API is unreachable.
+    Sentry.captureException(err);
     return null;
   }
   if (res.status === 402) await throwPaywall(res);
   if (!res.ok) return null;
   try {
     return (await res.json()) as T;
-  } catch {
+  } catch (err) {
+    Sentry.captureException(err);
     return null;
   }
 }
@@ -63,7 +69,8 @@ export async function apiSend(path: string, method: string, body?: unknown): Pro
       headers: { "Content-Type": "application/json", ...authHeaders() },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-  } catch {
+  } catch (err) {
+    Sentry.captureException(err);
     return false;
   }
   if (res.status === 402) await throwPaywall(res);

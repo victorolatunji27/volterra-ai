@@ -128,6 +128,7 @@ async def generate_weekly_review(user_id: UUID, db: AsyncSession) -> dict:
         logger.error(
             "generate_weekly_review(%s): Claude call failed — %s", user_id, exc, exc_info=True
         )
+        sentry_sdk.capture_exception(exc)
         await cache_set_json(cache_key, dict(EMPTY_REVIEW), ttl_seconds=EMPTY_REVIEW_TTL)
         return dict(EMPTY_REVIEW)
 

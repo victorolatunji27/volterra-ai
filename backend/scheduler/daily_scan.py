@@ -3,6 +3,8 @@ import asyncio
 import logging
 import sys
 import time
+
+import sentry_sdk
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -384,6 +386,12 @@ async def compose_and_send_digest() -> bool:
         sent = send_digest(recipients, html, subject)
         if not sent:
             logger.error("compose_and_send_digest: send_digest reported failure.")
+            # The Resend SDK path only surfaces success/failure, not a status
+            # code — report the batch failure with its blast radius.
+            sentry_sdk.capture_message(
+                f"Resend digest send failed for {len(recipients)} recipient(s)",
+                level="error",
+            )
             return False
 
         session.add(DigestLog(

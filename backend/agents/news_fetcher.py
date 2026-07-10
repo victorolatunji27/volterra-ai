@@ -61,6 +61,7 @@ async def synthesize_news(ticker: str, news_list: list[dict]) -> dict | None:
         )
     except Exception as exc:
         logger.error("synthesize_news(%s): Claude call failed — %s", ticker, exc, exc_info=True)
+        sentry_sdk.capture_exception(exc)
         return None
 
     result = _parse_json_block(raw)

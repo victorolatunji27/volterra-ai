@@ -205,9 +205,13 @@ async def analyze_flow(flow_scan: dict) -> dict | None:
                     "analyze_flow(%s): invalid JSON after retry. Raw: %r",
                     ticker, raw_retry[:300],
                 )
+                sentry_sdk.capture_message(
+                    f"analyze_flow({ticker}): invalid JSON after retry", level="error"
+                )
                 return None
     except Exception as exc:
         logger.error("analyze_flow(%s): Claude call failed — %s", ticker, exc, exc_info=True)
+        sentry_sdk.capture_exception(exc)
         return None
 
     await cache_set_json(cache_key, result, ttl_seconds=86400)
@@ -277,6 +281,7 @@ async def tag_strategy(summary: dict) -> list[str]:
         tags = _parse_json_block(raw)
     except Exception as exc:
         logger.error("tag_strategy: Claude call failed — %s", exc, exc_info=True)
+        sentry_sdk.capture_exception(exc)
         return ["neutral"]
 
     if not isinstance(tags, list):

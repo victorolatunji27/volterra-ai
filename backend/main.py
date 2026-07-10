@@ -29,11 +29,16 @@ logger = logging.getLogger(__name__)
 # ── Sentry (skip silently in local dev when SENTRY_DSN is unset) ────────────
 SENTRY_DSN = os.getenv("SENTRY_DSN")
 if SENTRY_DSN:
+    from sentry_sdk.integrations.fastapi import FastApiIntegration
+    from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+
     sentry_sdk.init(
         dsn=SENTRY_DSN,
-        environment=os.getenv("ENVIRONMENT", "development"),
-        traces_sample_rate=0.1,
+        integrations=[FastApiIntegration(), SqlalchemyIntegration()],
+        traces_sample_rate=0.2,
         profiles_sample_rate=0.1,
+        environment=os.getenv("ENVIRONMENT", "development"),
+        send_default_pii=False,
     )
 
 
