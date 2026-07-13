@@ -3,6 +3,7 @@
 // one-time first-run prompt when the user has no saved strategy_tags yet.
 import React, { useEffect, useState } from "react";
 import PaywallGate from "@/components/PaywallGate";
+import { SkCard } from "@/components/Skeleton";
 import { useToast } from "@/components/toast";
 import { fetchMe, saveStrategyPrefs } from "@/lib/api";
 import { track } from "@/lib/posthog";
@@ -102,7 +103,13 @@ export default function AlertsPage() {
         <p style={{ fontSize: 15.5, color: "var(--text-2)", margin: 0 }}>Decide when VolterraAI reaches out — and about what.</p>
       </div>
 
-      {phase === "loading" ? null : phase === "firstRun" ? (
+      {phase === "loading" ? (
+        /* Never blank while /me resolves — two-column card skeleton. */
+        <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "1fr 1fr", gap: 18, alignItems: "start" }}>
+          <SkCard h={300} lines={5} />
+          <SkCard h={300} lines={4} />
+        </div>
+      ) : phase === "firstRun" ? (
         /* First-run prompt — shown once, until strategy_tags is non-empty. */
         <div style={{ ...card, maxWidth: 560, margin: "36px auto 0", textAlign: "center", padding: "40px 36px" }}>
           <h2 style={{ fontSize: 24, fontWeight: 600, letterSpacing: "-0.02em", margin: "0 0 10px" }}>Which setups do you trade?</h2>

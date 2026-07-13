@@ -6,6 +6,7 @@ import { useTheme, WIN, LOSS } from "@/components/theme";
 import { useToast } from "@/components/toast";
 import { ICONS, svgIcon } from "@/components/icons";
 import EmptyState, { BookmarkIcon } from "@/components/EmptyState";
+import { InlineError, Sk } from "@/components/Skeleton";
 import { fetchJournal, apiSend } from "@/lib/api";
 import { track } from "@/lib/posthog";
 import { DEMO_JOURNAL, JournalRow } from "@/lib/demo";
@@ -27,18 +28,29 @@ export default function JournalPage() {
   const narrow = w < 900;
   const [rows, setRows] = useState<JournalRow[]>(DEMO_JOURNAL);
   const [journalEmpty, setJournalEmpty] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [filter, setFilter] = useState<(typeof FILTERS)[number]>("All");
   const [open, setOpen] = useState<number | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let alive = true;
-    fetchJournal().then((r) => {
-      if (!alive) return;
-      setRows(r.rows);
-      setJournalEmpty(r.empty);
-    });
+    setLoadError(null);
+    fetchJournal()
+      .then((r) => {
+        if (!alive) return;
+        setRows(r.rows);
+        setJournalEmpty(r.empty);
+      })
+      .catch((err) => {
+        if (alive) setLoadError(err instanceof Error ? err.message : "Failed to load journal.");
+      })
+      .finally(() => {
+        if (alive) setLoading(false);
+      });
     return () => { alive = false; };
-  }, []);
+  }, [reloadKey]);
 
   const SC: Record<string, string> = { Win: WIN, Loss: LOSS, Scratch: "var(--text-3)", Pending: ac.a1 };
   const data = filter === "All" ? rows : rows.filter((d) => d.status === filter);
@@ -77,7 +89,34 @@ export default function JournalPage() {
         </button>
       </div>
 
-      {journalEmpty ? (
+      {loading ? (
+        /* Shape-matched skeleton: stat row + table rows. */
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: narrow ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: 14, marginBottom: 24 }}>
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} style={{ padding: "16px 18px", borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", boxShadow: "var(--shadow)" }}>
+                <Sk h={12} w="55%" style={{ marginBottom: 10 }} />
+                <Sk h={22} w="45%" style={{ marginBottom: 8 }} />
+                <Sk h={11} w="65%" />
+              </div>
+            ))}
+          </div>
+          <div style={{ borderRadius: 9, border: "1px solid var(--border)", background: "var(--surface)", boxShadow: "var(--shadow)", overflow: "hidden" }}>
+            {[0, 1, 2, 3, 4, 5].map((i) => (
+              <div key={i} style={{ display: "flex", alignItems: "center", gap: 16, padding: "15px 20px", borderBottom: i < 5 ? "1px solid var(--border)" : "none" }}>
+                <Sk h={14} w={54} />
+                <Sk h={20} w={92} r={7} />
+                <div style={{ flex: 1 }} />
+                <Sk h={13} w={64} />
+                <Sk h={20} w={62} r={7} />
+                <Sk h={14} w={52} />
+              </div>
+            ))}
+          </div>
+        </>
+      ) : loadError ? (
+        <InlineError message={loadError} onRetry={() => { setLoading(true); setReloadKey((k) => k + 1); }} />
+      ) : journalEmpty ? (
         /* Nothing saved yet — reachable API returned an empty journal. */
         <EmptyState
           icon={<BookmarkIcon />}

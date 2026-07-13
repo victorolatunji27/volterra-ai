@@ -6,6 +6,7 @@ import { Spark } from "@/components/charts";
 import { rescanIcon } from "@/components/icons";
 import EmptyState, { ClockIcon } from "@/components/EmptyState";
 import SetupCard from "@/components/SetupCard";
+import { InlineError, Sk } from "@/components/Skeleton";
 import { useToast } from "@/components/toast";
 import { apiSend, fetchSetups } from "@/lib/api";
 import { track } from "@/lib/posthog";
@@ -42,7 +43,7 @@ function StatCards({ topTicker, topScore, bullish, total }: { topTicker: string;
   );
 }
 
-function ScanningCards() {
+function ScanningCards({ label = "Claude is re-scanning today's options flow…" }: { label?: string }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
       {[0, 1, 2].map((i) => (
@@ -51,7 +52,7 @@ function ScanningCards() {
           {i === 0 ? (
             <div style={{ position: "relative", display: "flex", alignItems: "center", gap: 12, color: "var(--text-2)", fontSize: 14 }}>
               <span style={{ width: 18, height: 18, borderRadius: "50%", border: "2px solid var(--border-2)", borderTopColor: "var(--a1)", display: "inline-block", animation: "spin .8s linear infinite" }} />
-              Claude is re-scanning today&apos;s options flow…
+              {label}
             </div>
           ) : (
             <div style={{ height: 54 }} />
@@ -67,22 +68,49 @@ function ScanningCards() {
   );
 }
 
+/** Shape-matched skeleton for the stat card row. */
+function StatCardSkeletons({ mid }: { mid: boolean }) {
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: mid ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: 16, marginBottom: 14 }}>
+      {[0, 1, 2, 3].map((i) => (
+        <div key={i} style={{ padding: "18px 18px 16px", borderRadius: 9, border: "1px solid var(--border)", background: "var(--surface)", boxShadow: "var(--shadow)" }}>
+          <Sk h={12} w="45%" style={{ marginBottom: 12 }} />
+          <Sk h={26} w="60%" style={{ marginBottom: 9 }} />
+          <Sk h={11} w="70%" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function ScanPage() {
   const w = useWidth();
   const mid = w < 1180;
   const { flash } = useToast();
   const [setups, setSetups] = useState<Setup[]>(DEMO_SETUPS);
   const [empty, setEmpty] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [scanning, setScanning] = useState(false);
   const scanTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const alive = useRef(true);
 
   const load = useCallback(() => {
-    fetchSetups().then((r) => {
-      if (!alive.current) return;
-      setSetups(r.setups);
-      setEmpty(r.empty);
-    });
+    setLoadError(null);
+    fetchSetups()
+      .then((r) => {
+        if (!alive.current) return;
+        setSetups(r.setups);
+        setEmpty(r.empty);
+      })
+      .catch((err) => {
+        // Only genuinely rejectable paths land here (e.g. PaywallError) —
+        // plain network failure resolves to demo data inside fetchSetups.
+        if (alive.current) setLoadError(err instanceof Error ? err.message : "Failed to load setups.");
+      })
+      .finally(() => {
+        if (alive.current) setLoading(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -125,7 +153,20 @@ export default function ScanPage() {
         </div>
       </div>
 
-      {empty && !scanning ? (
+      {loading ? (
+        /* Initial fetch in flight — shape-matched skeleton, never blank. */
+        <>
+          <StatCardSkeletons mid={mid} />
+          <div style={{ margin: "30px 0 16px" }}>
+            <Sk h={16} w={180} />
+          </div>
+          <ScanningCards label="Loading today's setups…" />
+        </>
+      ) : loadError ? (
+        <div style={{ marginTop: 24 }}>
+          <InlineError message={loadError} onRetry={() => { setLoading(true); load(); }} />
+        </div>
+      ) : empty && !scanning ? (
         /* Weekend / market closed / scan not yet run. */
         <div style={{ marginTop: 24 }}>
           <EmptyState

@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 import { useTheme, WIN, LOSS } from "@/components/theme";
 import { Spark, Area, Donut } from "@/components/charts";
 import PaywallGate from "@/components/PaywallGate";
+import { InlineError, Sk, SkCard } from "@/components/Skeleton";
 import { useToast } from "@/components/toast";
 import { fetchAnalytics, AnalyticsData } from "@/lib/api";
 import { DEMO_ANALYTICS_OVERVIEW, DEMO_EQUITY, DEMO_STRATEGY_PERF, DEMO_TICKER_PERF } from "@/lib/demo";
@@ -25,12 +26,21 @@ export default function AnalyticsPage() {
     strategyPerf: DEMO_STRATEGY_PERF,
     tickerPerf: DEMO_TICKER_PERF,
   });
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
 
   useEffect(() => {
     let alive = true;
-    fetchAnalytics().then((d) => { if (alive) setData(d); });
+    setLoadError(null);
+    fetchAnalytics()
+      .then((d) => { if (alive) setData(d); })
+      .catch((err) => {
+        if (alive) setLoadError(err instanceof Error ? err.message : "Failed to load analytics.");
+      })
+      .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, []);
+  }, [reloadKey]);
 
   const o = data.overview;
   const overviewCards = [
@@ -54,6 +64,31 @@ export default function AnalyticsPage() {
         <p style={{ fontSize: 15.5, color: "var(--text-2)", margin: 0 }}>How your decisions are actually performing — measured, not guessed.</p>
       </div>
 
+      {loading ? (
+        /* Shape-matched skeleton: 4 overview tiles + the two chart rows. */
+        <>
+          <div style={{ display: "grid", gridTemplateColumns: mid ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: 16, marginBottom: 18 }}>
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} style={{ padding: "18px 20px", borderRadius: 9, border: "1px solid var(--border)", background: "var(--surface)", boxShadow: "var(--shadow)" }}>
+                <Sk h={12} w="50%" style={{ marginBottom: 12 }} />
+                <Sk h={27} w="60%" style={{ marginBottom: 10 }} />
+                <Sk h={11} w="70%" />
+              </div>
+            ))}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: mid ? "1fr" : "1.5fr 1fr", gap: 18, marginBottom: 18, alignItems: "start" }}>
+            <SkCard h={320} lines={4} />
+            <SkCard h={280} lines={5} />
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: narrow ? "1fr" : "1fr 1fr", gap: 18, alignItems: "start" }}>
+            <SkCard h={260} lines={5} />
+            <SkCard h={260} lines={4} />
+          </div>
+        </>
+      ) : loadError ? (
+        <InlineError message={loadError} onRetry={() => { setLoading(true); setReloadKey((k) => k + 1); }} />
+      ) : (
+      <>
       <div style={{ display: "grid", gridTemplateColumns: mid ? "repeat(2,1fr)" : "repeat(4,1fr)", gap: 16, marginBottom: 18 }}>
         {overviewCards.map((c, i) => (
           <div key={i} style={{ padding: "18px 20px", borderRadius: 9, border: "1px solid var(--border)", background: "var(--surface)", backdropFilter: "var(--glass-blur)", WebkitBackdropFilter: "var(--glass-blur)", boxShadow: "var(--shadow)" }}>
@@ -174,6 +209,8 @@ export default function AnalyticsPage() {
         </div>
         </PaywallGate>
       </div>
+      </>
+      )}
     </>
   );
 }

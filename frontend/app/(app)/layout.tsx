@@ -2,6 +2,7 @@
 // App shell — sidebar navigation + main column, per the design's isApp section.
 import React from "react";
 import { usePathname, useRouter } from "next/navigation";
+import ErrorBoundary from "@/components/ErrorBoundary";
 import { ThemeControls, useTheme } from "@/components/theme";
 import { ICONS, svgIcon } from "@/components/icons";
 import { useWidth } from "@/lib/useWidth";
@@ -69,9 +70,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      {/* MAIN */}
+      {/* MAIN — every app view (/scan, /ticker/*, /journal, /analytics, …)
+          renders inside the render-error boundary. */}
       <main style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
-        <div style={{ maxWidth: 1180, width: "100%", margin: "0 auto", padding: "34px 38px 80px" }}>{children}</div>
+        <div style={{ maxWidth: 1180, width: "100%", margin: "0 auto", padding: "34px 38px 80px" }}>
+          <ErrorBoundary>{children}</ErrorBoundary>
+        </div>
       </main>
     </div>
   );

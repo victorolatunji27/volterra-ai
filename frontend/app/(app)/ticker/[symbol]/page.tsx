@@ -9,6 +9,7 @@ import { useToast } from "@/components/toast";
 import { tagFor } from "@/lib/tags";
 import { apiSend, fetchTicker, TickerDetail } from "@/lib/api";
 import { track } from "@/lib/posthog";
+import { InlineError, Sk, SkCard } from "@/components/Skeleton";
 import {
   DEMO_AI_BLOCKS, DEMO_NEWS_FULL, DEMO_NEWS_TEASER,
   DEMO_HISTORY_WEEKS, DEMO_HISTORY_ROWS, DEMO_SETUPS, DEMO_TICKER_SERIES,
@@ -237,8 +238,13 @@ export default function TickerPage() {
     history: null,
   });
 
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
   useEffect(() => {
     let alive = true;
+    setLoadError(null);
     // Demo mode: the landing page's "View demo setup" stashes the payload
     // from GET /api/demo/setup and links here with ?demo=1 — render exactly
     // that instead of fetching live ticker data.
@@ -248,15 +254,21 @@ export default function TickerPage() {
         if (raw) {
           const d = JSON.parse(raw) as { setup: TickerDetail["setup"]; aiBlocks: TickerDetail["aiBlocks"] };
           setDetail({ demo: true, setup: d.setup, series: DEMO_TICKER_SERIES, aiBlocks: d.aiBlocks, history: null });
+          setLoading(false);
           return;
         }
       } catch {
         /* corrupt/missing stash — fall through to the normal fetch */
       }
     }
-    fetchTicker(symbol).then((d) => { if (alive) setDetail(d); });
+    fetchTicker(symbol)
+      .then((d) => { if (alive) setDetail(d); })
+      .catch((err) => {
+        if (alive) setLoadError(err instanceof Error ? err.message : "Failed to load ticker.");
+      })
+      .finally(() => { if (alive) setLoading(false); });
     return () => { alive = false; };
-  }, [symbol]);
+  }, [symbol, reloadKey]);
 
   const s = detail.setup;
   const tg = tagFor(s.tag);
@@ -271,6 +283,49 @@ export default function TickerPage() {
   };
 
   const tabs: [Tab, string][] = [["overview", "Overview"], ["flow", "Flow stats"], ["ai", "AI analysis"], ["news", "News"], ["history", "History"]];
+
+  if (loading) {
+    // Shape-matched skeleton: breadcrumb + header row + main/side columns.
+    return (
+      <>
+        <Sk h={13} w={140} style={{ marginBottom: 18 }} />
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 18, marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 18 }}>
+            <Sk h={54} w={54} r={8} />
+            <div>
+              <Sk h={26} w={120} style={{ marginBottom: 8 }} />
+              <Sk h={13} w={170} />
+            </div>
+          </div>
+          <Sk h={40} w={220} r={7} />
+        </div>
+        <Sk h={40} w="100%" style={{ marginBottom: 26 }} />
+        <div style={{ display: "grid", gridTemplateColumns: mid ? "1fr" : "1.55fr 1fr", gap: 20, alignItems: "start" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+            <SkCard h={250} lines={3} />
+            <SkCard h={300} lines={5} />
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+            <SkCard h={260} lines={4} />
+            <SkCard h={210} lines={3} />
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "var(--text-3)", marginBottom: 18 }}>
+          <span onClick={() => router.push("/scan")} style={{ cursor: "pointer" }}>Daily scan</span>
+          <span>/</span>
+          <span style={{ color: "var(--text-2)" }}>{symbol}</span>
+        </div>
+        <InlineError message={loadError} onRetry={() => { setLoading(true); setReloadKey((k) => k + 1); }} />
+      </>
+    );
+  }
 
   return (
     <>

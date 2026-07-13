@@ -6,6 +6,7 @@
 // illustrative demo data with { demo: true } so callers can tell.
 import * as Sentry from "@sentry/nextjs";
 
+import { notifyApiError } from "@/components/toast";
 import {
   DEMO_SETUPS, DEMO_JOURNAL, DEMO_TICKER_SERIES, DEMO_EQUITY,
   DEMO_STRATEGY_PERF, DEMO_TICKER_PERF, DEMO_ANALYTICS_OVERVIEW,
@@ -70,10 +71,16 @@ export async function apiSend(path: string, method: string, body?: unknown): Pro
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (err) {
+    // Network unreachable = demo mode — no error toast, callers fall back.
     Sentry.captureException(err);
     return false;
   }
   if (res.status === 402) await throwPaywall(res);
+  if (!res.ok) {
+    // The backend answered with an error — that's a real failure the user
+    // should see (unlike unreachable-network demo mode above).
+    notifyApiError(`Request failed (${res.status}). Please try again.`);
+  }
   return res.ok;
 }
 

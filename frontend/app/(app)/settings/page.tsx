@@ -4,6 +4,7 @@
 // keeping the design's illustrative values in demo mode.
 import React, { useEffect, useState } from "react";
 import { ACCENTS, AccentKey, useTheme } from "@/components/theme";
+import { Sk } from "@/components/Skeleton";
 import { useToast } from "@/components/toast";
 import { fetchMe, Me } from "@/lib/api";
 import { useWidth } from "@/lib/useWidth";
@@ -51,12 +52,17 @@ export default function SettingsPage() {
   const w = useWidth();
   const narrow = w < 900;
   const [account, setAccount] = useState(DEMO_ACCOUNT);
+  const [accountLoading, setAccountLoading] = useState(true);
 
   useEffect(() => {
     let alive = true;
-    fetchMe().then((me) => {
-      if (alive && me) setAccount(accountFromMe(me));
-    });
+    fetchMe()
+      .then((me) => {
+        if (alive && me) setAccount(accountFromMe(me));
+      })
+      .finally(() => {
+        if (alive) setAccountLoading(false);
+      });
     return () => { alive = false; };
   }, []);
 
@@ -70,23 +76,44 @@ export default function SettingsPage() {
         {/* Account — #billing is the PaywallGate "Upgrade to Pro" target */}
         <div id="billing" style={card}>
           <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 18 }}>Account</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 14, paddingBottom: 20, marginBottom: 6, borderBottom: "1px solid var(--border)" }}>
-            <div style={{ width: 48, height: 48, borderRadius: "50%", background: "linear-gradient(135deg,var(--a1),var(--a3))", display: "grid", placeItems: "center", fontSize: 18, fontWeight: 600, color: "#faf6ee" }}>
-              {account.name.charAt(0).toUpperCase()}
-            </div>
-            <div>
-              <div style={{ fontSize: 15, fontWeight: 600 }}>{account.name}</div>
-              <div style={{ fontSize: 13, color: "var(--text-3)" }}>{account.subtitle}</div>
-            </div>
-          </div>
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            {account.rows.map((r, i) => (
-              <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 0", borderTop: i > 0 ? "1px solid var(--border)" : "none" }}>
-                <span style={{ fontSize: 13.5, color: "var(--text-3)" }}>{r[0]}</span>
-                <span style={{ fontSize: 13.5, fontWeight: 500, fontFamily: r[1].indexOf("@") > 0 || /\d/.test(r[1]) ? mono : "inherit" }}>{r[1]}</span>
+          {accountLoading ? (
+            /* Shape-matched skeleton: avatar row + four detail rows. */
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, paddingBottom: 20, marginBottom: 6, borderBottom: "1px solid var(--border)" }}>
+                <Sk h={48} w={48} r={24} />
+                <div style={{ flex: 1 }}>
+                  <Sk h={15} w="45%" style={{ marginBottom: 8 }} />
+                  <Sk h={12} w="35%" />
+                </div>
               </div>
-            ))}
-          </div>
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} style={{ display: "flex", justifyContent: "space-between", padding: "13px 0", borderTop: i > 0 ? "1px solid var(--border)" : "none" }}>
+                  <Sk h={13} w="30%" />
+                  <Sk h={13} w="40%" />
+                </div>
+              ))}
+            </>
+          ) : (
+            <>
+              <div style={{ display: "flex", alignItems: "center", gap: 14, paddingBottom: 20, marginBottom: 6, borderBottom: "1px solid var(--border)" }}>
+                <div style={{ width: 48, height: 48, borderRadius: "50%", background: "linear-gradient(135deg,var(--a1),var(--a3))", display: "grid", placeItems: "center", fontSize: 18, fontWeight: 600, color: "#faf6ee" }}>
+                  {account.name.charAt(0).toUpperCase()}
+                </div>
+                <div>
+                  <div style={{ fontSize: 15, fontWeight: 600 }}>{account.name}</div>
+                  <div style={{ fontSize: 13, color: "var(--text-3)" }}>{account.subtitle}</div>
+                </div>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column" }}>
+                {account.rows.map((r, i) => (
+                  <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 0", borderTop: i > 0 ? "1px solid var(--border)" : "none" }}>
+                    <span style={{ fontSize: 13.5, color: "var(--text-3)" }}>{r[0]}</span>
+                    <span style={{ fontSize: 13.5, fontWeight: 500, fontFamily: r[1].indexOf("@") > 0 || /\d/.test(r[1]) ? mono : "inherit" }}>{r[1]}</span>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
           <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
             <button onClick={() => flash("Billing portal opened")} style={{ cursor: "pointer", fontFamily: "inherit", fontSize: 13.5, fontWeight: 600, color: "#faf6ee", background: "linear-gradient(135deg,var(--a1),var(--a2))", border: "none", padding: "10px 18px", borderRadius: 7 }}>
               Manage subscription
