@@ -11,6 +11,8 @@ logger = logging.getLogger(__name__)
 
 RESEND_API_KEY: str = os.getenv("RESEND_API_KEY", "")
 DIGEST_FROM_ADDRESS: str = os.getenv("DIGEST_FROM_ADDRESS", "VolterraAI <digest@volterraai.com>")
+# Public site URL used for links inside emails (no trailing slash).
+APP_BASE_URL: str = os.getenv("APP_BASE_URL", "https://volterraai.com").rstrip("/")
 
 MAX_DIGEST_ENTRIES = 5
 
@@ -74,7 +76,7 @@ def _scan_block(scan: dict) -> str:
         f"{risk_block}"
         '<tr><td colspan="2" style="padding: 10px 0 0 0; font-family: Arial, sans-serif; '
         'font-size: 13px;">'
-        f'<a href="https://volterraai.com/ticker/{ticker}" style="color: #4338ca; '
+        f'<a href="{APP_BASE_URL}/ticker/{ticker}" style="color: #4338ca; '
         'text-decoration: none;">View in VolterraAI &rarr;</a>'
         "</td></tr>"
         "</table>"

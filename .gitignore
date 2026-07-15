@@ -40,6 +40,7 @@ venv.bak/
 .env
 .env.*
 !.env.example
+!.env.local.example
 *.local
 
 # Node / Frontend

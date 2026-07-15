@@ -26,6 +26,24 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+# ── Required-config check: fail at startup, not with a confusing runtime
+#    error deep in a request. Hard-crash only in production — local dev, the
+#    test suite, and CI all run intentionally degraded (no Resend/Upstash),
+#    so there they get a loud warning instead.
+REQUIRED_ENV_VARS = [
+    "DB_USER", "DB_PASSWORD", "DB_HOST", "DB_PORT", "DB_NAME",
+    "ANTHROPIC_API_KEY", "NEWSAPI_KEY", "RESEND_API_KEY",
+    "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN",
+]
+_missing_env = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
+if _missing_env:
+    if os.getenv("ENVIRONMENT", "development") == "production":
+        raise RuntimeError(f"Missing required env vars: {_missing_env}")
+    logger.warning(
+        "Missing env vars (features degraded; fatal in production): %s",
+        _missing_env,
+    )
+
 # ── Sentry (skip silently in local dev when SENTRY_DSN is unset) ────────────
 SENTRY_DSN = os.getenv("SENTRY_DSN")
 if SENTRY_DSN:
