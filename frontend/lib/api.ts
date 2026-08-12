@@ -7,6 +7,7 @@
 import * as Sentry from "@sentry/nextjs";
 
 import { notifyApiError } from "@/components/toast";
+import { getSupabase } from "@/lib/supabase";
 import {
   DEMO_SETUPS, DEMO_JOURNAL, DEMO_TICKER_SERIES, DEMO_EQUITY,
   DEMO_STRATEGY_PERF, DEMO_TICKER_PERF, DEMO_ANALYTICS_OVERVIEW,
@@ -43,7 +44,7 @@ async function apiGet<T>(path: string): Promise<T | null> {
   try {
     res = await fetch(`${API_URL}${path}`, {
       signal: AbortSignal.timeout(TIMEOUT_MS),
-      headers: authHeaders(),
+      headers: await authHeaders(),
     });
   } catch (err) {
     // Captured (no-op without a DSN) but NOT rethrown: callers rely on the
@@ -67,7 +68,7 @@ export async function apiSend(path: string, method: string, body?: unknown): Pro
     res = await fetch(`${API_URL}${path}`, {
       method,
       signal: AbortSignal.timeout(TIMEOUT_MS),
-      headers: { "Content-Type": "application/json", ...authHeaders() },
+      headers: { "Content-Type": "application/json", ...(await authHeaders()) },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (err) {
@@ -84,12 +85,34 @@ export async function apiSend(path: string, method: string, body?: unknown): Pro
   return res.ok;
 }
 
-function authHeaders(): Record<string, string> {
-  // Supabase session wiring lands with real auth; until then a token may be
-  // planted in localStorage for testing against a live backend.
+/**
+ * Bearer header for the backend, from the live Supabase session.
+ *
+ * The session lives in cookies (via @supabase/ssr, so middleware can read it
+ * too) — getSession() reads it from storage and transparently refreshes an
+ * expired access token. Returns {} in demo mode / when signed out, which the
+ * backend answers with 401 and callers turn into the demo fallback.
+ *
+ * The localStorage escape hatch stays for exercising a live backend before
+ * Supabase is wired up: localStorage.setItem('volterra-token', '<jwt>').
+ */
+async function authHeaders(): Promise<Record<string, string>> {
   if (typeof window === "undefined") return {};
-  const token = localStorage.getItem("volterra-token");
-  return token ? { Authorization: `Bearer ${token}` } : {};
+
+  const supabase = getSupabase();
+  if (supabase) {
+    try {
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (token) return { Authorization: `Bearer ${token}` };
+    } catch (err) {
+      // Never let an auth-storage failure break the request path.
+      Sentry.captureException(err);
+    }
+  }
+
+  const manual = localStorage.getItem("volterra-token");
+  return manual ? { Authorization: `Bearer ${manual}` } : {};
 }
 
 // ---------------------------------------------------------------------------
