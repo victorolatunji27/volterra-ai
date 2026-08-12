@@ -60,8 +60,9 @@ cp .env.example .env          # fill in your keys (see table below)
 
 # Database schema (against your Supabase or local Postgres)
 psql $DATABASE_URL -f db/migrations/001_initial_schema.sql
-# On Supabase, also apply RLS (or paste into the SQL Editor):
+# On Supabase, also apply RLS + the signup trigger (or paste into the SQL Editor):
 psql $DATABASE_URL -f db/migrations/002_rls_policies.sql
+psql $DATABASE_URL -f db/migrations/003_user_profile_trigger.sql
 
 # Run the data pipeline manually
 python scheduler/daily_scan.py

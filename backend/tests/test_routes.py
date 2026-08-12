@@ -172,6 +172,64 @@ def test_demo_setup_is_public_and_static(client):
     }
 
 
+class _ProfileDB:
+    """Fake session for get_current_user: canned lookup + records inserts."""
+
+    def __init__(self, existing=None):
+        self.existing = existing
+        self.added = []
+
+    async def execute(self, *args, **kwargs):
+        return _FakeResult(scalar_one_or_none=self.existing)
+
+    def add(self, obj):
+        self.added.append(obj)
+
+    async def flush(self):
+        pass
+
+    async def refresh(self, obj):
+        obj.created_at = datetime.now(tz=timezone.utc)
+
+
+async def test_get_current_user_creates_missing_profile():
+    # A valid Supabase token whose user has no profile row yet (trigger never
+    # ran) must self-heal into a profile, not 401 the user out of the app.
+    user_id = uuid.uuid4()
+    db = _ProfileDB(existing=None)
+    request = MagicMock()
+    request.headers = {"Authorization": "Bearer faketoken"}
+
+    with patch("api.deps.SUPABASE_JWT_SECRET", "secret"), patch(
+        "api.deps.decode_token",
+        return_value={"sub": str(user_id), "email": "new@test.com"},
+    ):
+        user = await get_current_user(request, db)
+
+    assert user.id == user_id
+    assert user.email == "new@test.com"
+    assert user.tier == "free"
+    assert len(db.added) == 1
+
+
+async def test_get_current_user_reuses_existing_profile():
+    user_id = uuid.uuid4()
+    existing = _fake_user()
+    existing.id = user_id
+    db = _ProfileDB(existing=existing)
+    request = MagicMock()
+    request.headers = {"Authorization": "Bearer faketoken"}
+
+    with patch("api.deps.SUPABASE_JWT_SECRET", "secret"), patch(
+        "api.deps.decode_token",
+        return_value={"sub": str(user_id), "email": "ignored@test.com"},
+    ):
+        user = await get_current_user(request, db)
+
+    assert user is existing
+    assert db.added == []  # nothing created for an existing user
+
+
 def test_journal_requires_auth(client):
     response = client.get("/api/journal")
     assert response.status_code == 401

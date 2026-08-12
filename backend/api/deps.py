@@ -7,6 +7,7 @@ import jwt
 from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, Request
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from db.database import get_db
@@ -58,7 +59,9 @@ async def get_current_user(
     Resolve the authenticated user from the Authorization: Bearer header.
 
     Verifies the Supabase JWT signature, extracts the "sub" UUID, and loads
-    the matching user_profiles row. Raises 401 on any failure.
+    the matching user_profiles row — creating it on first sight if the
+    Supabase trigger (migration 003) never ran for this user. Raises 401 on
+    any failure.
     """
     if not SUPABASE_JWT_SECRET:
         logger.error("get_current_user: SUPABASE_JWT_SECRET is not configured.")
@@ -90,10 +93,46 @@ async def get_current_user(
     ).scalar_one_or_none()
 
     if user is None:
-        logger.info("get_current_user: no user_profiles row for %s", user_id)
-        raise _CREDENTIALS_ERROR
+        # The token is valid, so this is a real Supabase user without a
+        # profile row — self-heal rather than 401-looping them out of the app.
+        user = await _create_profile(db, user_id, payload)
 
     return user
+
+
+async def _create_profile(db: AsyncSession, user_id: uuid.UUID, payload: dict) -> UserProfile:
+    """Create the user_profiles row for an authenticated Supabase user.
+
+    Normally migration 003's trigger has already done this at signup; this
+    covers users created before the trigger existed, a trigger that failed,
+    and accounts added straight from the Supabase dashboard.
+    """
+    email = payload.get("email") or ""
+    if not email:
+        # Phone-only / anonymous signups have no email claim. The row is still
+        # created (email is NOT NULL but may be empty); they simply receive no
+        # digest or alert mail until an address is set.
+        logger.warning("_create_profile: no email claim for %s — creating with empty email.", user_id)
+
+    profile = UserProfile(id=user_id, email=email, tier="free")
+    db.add(profile)
+    try:
+        await db.flush()
+    except IntegrityError:
+        # A concurrent request won the race — reuse the row it created.
+        await db.rollback()
+        existing = (
+            await db.execute(select(UserProfile).where(UserProfile.id == user_id))
+        ).scalar_one_or_none()
+        if existing is None:
+            logger.error("_create_profile: insert conflicted but no row found for %s", user_id)
+            raise _CREDENTIALS_ERROR
+        return existing
+
+    # Pull server defaults (created_at) so response models validate.
+    await db.refresh(profile)
+    logger.info("_create_profile: created user_profiles row for %s", user_id)
+    return profile
 
 
 async def get_current_user_optional(
