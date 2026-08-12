@@ -19,6 +19,7 @@ from sqlalchemy import func, select
 from agents.flow_analyzer import analyze_flow, store_summary, tag_strategy
 from agents.journal_agent import generate_weekly_review
 from agents.news_fetcher import synthesize_news
+from config import BILLING_ENABLED, FREE_DIGEST_DAYS
 from data.market_data import get_current_price, get_iv_rank
 from data.news_fetcher import fetch_news_for_ticker
 from data.options_fetcher import fetch_options_flow_yfinance
@@ -357,8 +358,11 @@ async def compose_and_send_digest() -> bool:
     """
     Build and send the morning-brief email to eligible users, then log it.
 
-    Eligible recipients: pro-tier users, plus free users within their first
-    30 days. Returns True when the digest was sent successfully.
+    Eligible recipients: every user while BILLING_ENABLED is False (the
+    free-tier launch). Once paid plans exist, it narrows to pro-tier users
+    plus free users inside their first FREE_DIGEST_DAYS.
+
+    Returns True when the digest was sent successfully.
     """
     async with async_session() as session:
         scans = await _todays_scans_with_summaries(session, limit=5)
@@ -366,14 +370,13 @@ async def compose_and_send_digest() -> bool:
             logger.warning("compose_and_send_digest: no scans for today — skipping send.")
             return False
 
-        cutoff = datetime.now(tz=timezone.utc) - timedelta(days=30)
-        users = (
-            await session.execute(
-                select(UserProfile).where(
-                    (UserProfile.tier == "pro") | (UserProfile.created_at > cutoff)
-                )
+        query = select(UserProfile)
+        if BILLING_ENABLED:
+            cutoff = datetime.now(tz=timezone.utc) - timedelta(days=FREE_DIGEST_DAYS)
+            query = query.where(
+                (UserProfile.tier == "pro") | (UserProfile.created_at > cutoff)
             )
-        ).scalars().all()
+        users = (await session.execute(query)).scalars().all()
         recipients = [u.email for u in users if u.email]
 
         if not recipients:

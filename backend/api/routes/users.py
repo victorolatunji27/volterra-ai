@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.deps import get_current_user
 from api.limiter import limiter, user_or_ip_key
 from api.schemas import UpdateStrategyTagsRequest, UserProfileResponse
+from config import BILLING_ENABLED
 from db.database import get_db
 from db.models import UserProfile
 from mailer.digest import send_digest
@@ -54,7 +55,8 @@ async def send_test_alert(
     request: Request,
     user: UserProfile = Depends(get_current_user),
 ):
-    if user.tier != "pro":
+    # Pro-gated only once paid plans exist; free-tier launch lets everyone through.
+    if BILLING_ENABLED and user.tier != "pro":
         raise HTTPException(status_code=403, detail="Strategy alerts are a Pro feature")
 
     sent = send_digest([user.email], TEST_ALERT_HTML, "VolterraAI test alert")

@@ -6,9 +6,16 @@
 // Ungated in demo mode / when unauthenticated (fetchMe returns null).
 // "Maybe later" hides the gate for the browser session only
 // (sessionStorage), never permanently.
+//
+// Disabled entirely unless NEXT_PUBLIC_PAYWALL_ENABLED === "true". The first
+// launch is free-tier-only with no Stripe, so gating everyone at day 31 with
+// an "Upgrade to Pro" button that leads nowhere would break the app on a
+// timer. Flip this flag (together with the backend's BILLING_ENABLED) when
+// paid plans ship.
 import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { fetchMe } from "@/lib/api";
+import { PAYWALL_ENABLED } from "@/lib/flags";
 import { track } from "@/lib/posthog";
 
 const DISMISS_PREFIX = "vt-paywall-dismissed:";
@@ -25,6 +32,9 @@ export default function PaywallGate({
   const [gated, setGated] = useState(false);
 
   useEffect(() => {
+    // Free-tier launch: no gating, and no wasted /me request.
+    if (!PAYWALL_ENABLED) return;
+
     let alive = true;
     try {
       if (sessionStorage.getItem(DISMISS_PREFIX + feature) === "1") return;

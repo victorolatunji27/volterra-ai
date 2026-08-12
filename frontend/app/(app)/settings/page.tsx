@@ -7,6 +7,7 @@ import { ACCENTS, AccentKey, useTheme } from "@/components/theme";
 import { Sk } from "@/components/Skeleton";
 import { useToast } from "@/components/toast";
 import { fetchMe, Me } from "@/lib/api";
+import { PAYWALL_ENABLED } from "@/lib/flags";
 import { useWidth } from "@/lib/useWidth";
 
 const mono = "var(--mono)";
@@ -115,9 +116,14 @@ export default function SettingsPage() {
             </>
           )}
           <div style={{ display: "flex", gap: 10, marginTop: 20 }}>
-            <button onClick={() => flash("Billing portal opened")} style={{ cursor: "pointer", fontFamily: "inherit", fontSize: 13.5, fontWeight: 600, color: "#faf6ee", background: "linear-gradient(135deg,var(--a1),var(--a2))", border: "none", padding: "10px 18px", borderRadius: 7 }}>
-              Manage subscription
-            </button>
+            {/* No billing integration on the free-tier launch — showing a
+                "Manage subscription" button would promise a portal that
+                doesn't exist. Returns when PAYWALL_ENABLED flips on. */}
+            {PAYWALL_ENABLED ? (
+              <button onClick={() => flash("Billing portal opened")} style={{ cursor: "pointer", fontFamily: "inherit", fontSize: 13.5, fontWeight: 600, color: "#faf6ee", background: "linear-gradient(135deg,var(--a1),var(--a2))", border: "none", padding: "10px 18px", borderRadius: 7 }}>
+                Manage subscription
+              </button>
+            ) : null}
             <button onClick={() => flash("Signed out (demo)")} style={{ cursor: "pointer", fontFamily: "inherit", fontSize: 13.5, fontWeight: 500, color: "var(--text-2)", background: "var(--surface-2)", border: "1px solid var(--border-2)", padding: "10px 18px", borderRadius: 7 }}>
               Sign out
             </button>

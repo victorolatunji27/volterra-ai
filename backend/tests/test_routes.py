@@ -376,8 +376,18 @@ def test_scans_days_above_max_returns_422(authed_client):
     assert response.status_code == 422
 
 
-def test_test_alert_requires_pro_tier(authed_client):
-    response = authed_client.post("/api/users/me/test-alert")
+def test_test_alert_open_to_free_tier_when_billing_disabled(authed_client):
+    # Free-tier launch (BILLING_ENABLED defaults False): no Pro gate.
+    with patch("api.routes.users.send_digest", return_value=True):
+        response = authed_client.post("/api/users/me/test-alert")
+    assert response.status_code == 200
+    assert response.json() == {"sent": True}
+
+
+def test_test_alert_requires_pro_tier_when_billing_enabled(authed_client):
+    # The Pro gate still works once paid plans ship.
+    with patch("api.routes.users.BILLING_ENABLED", True):
+        response = authed_client.post("/api/users/me/test-alert")
     assert response.status_code == 403
 
 
