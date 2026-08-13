@@ -6,6 +6,7 @@ import uuid
 import jwt
 from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, Request
+from jwt import PyJWKClient
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -17,17 +18,45 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+SUPABASE_URL: str = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_JWT_SECRET: str = os.getenv("SUPABASE_JWT_SECRET", "")
 
 _CREDENTIALS_ERROR = HTTPException(status_code=401, detail="Invalid or expired token")
+
+# Lazily built so importing this module never makes a network call; the
+# client caches fetched keys itself (lifespan bounds how long a rotated
+# Supabase signing key takes to be picked up without a restart).
+_jwks_client: PyJWKClient | None = None
+
+
+def _get_jwks_client() -> PyJWKClient:
+    global _jwks_client
+    if _jwks_client is None:
+        _jwks_client = PyJWKClient(
+            f"{SUPABASE_URL}/auth/v1/.well-known/jwks.json", lifespan=3600
+        )
+    return _jwks_client
 
 
 def decode_token(token: str) -> dict:
     """
     Verify and decode a Supabase JWT. Raises jwt exceptions on failure.
 
-    Supabase signs access tokens with HS256 and sets aud="authenticated".
+    Newer Supabase projects sign access tokens with an asymmetric key
+    (typically ES256) published at /auth/v1/.well-known/jwks.json — that is
+    the primary path here, selected by SUPABASE_URL being set. Projects still
+    on the legacy shared HS256 secret are supported as a fallback via
+    SUPABASE_JWT_SECRET, so this works regardless of which signing mode a
+    given project uses without needing to hardcode the assumption.
     """
+    if SUPABASE_URL:
+        signing_key = _get_jwks_client().get_signing_key_from_jwt(token)
+        return jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["ES256", "RS256"],
+            audience="authenticated",
+        )
     return jwt.decode(
         token,
         SUPABASE_JWT_SECRET,
@@ -63,8 +92,10 @@ async def get_current_user(
     Supabase trigger (migration 003) never ran for this user. Raises 401 on
     any failure.
     """
-    if not SUPABASE_JWT_SECRET:
-        logger.error("get_current_user: SUPABASE_JWT_SECRET is not configured.")
+    if not SUPABASE_URL and not SUPABASE_JWT_SECRET:
+        logger.error(
+            "get_current_user: neither SUPABASE_URL (JWKS) nor SUPABASE_JWT_SECRET is configured."
+        )
         raise _CREDENTIALS_ERROR
 
     auth_header = request.headers.get("Authorization", "")

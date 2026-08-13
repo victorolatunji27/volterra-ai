@@ -37,6 +37,9 @@ REQUIRED_ENV_VARS = [
     # Production runs on Tradier; without a key the scan would silently fall
     # back to yfinance, which gets rate-limited from cloud IPs.
     "TRADIER_API_KEY",
+    # Needed to verify Supabase JWTs via JWKS (api/deps.py); without it every
+    # authenticated request 401s.
+    "SUPABASE_URL",
 ]
 _missing_env = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
 if _missing_env:

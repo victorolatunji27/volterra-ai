@@ -12,6 +12,7 @@ sqlalchemy==2.0.50
 asyncpg==0.31.0
 pydantic==2.13.4
 PyJWT==2.13.0
+cryptography==50.0.0  # required by PyJWT for ES256/RS256 (Supabase JWKS verification)
 resend==2.30.1
 sentry-sdk==2.62.0
 slowapi==0.1.9
