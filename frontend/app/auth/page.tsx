@@ -162,7 +162,13 @@ function AuthInner() {
         return;
       }
       setBusy(true);
-      const { error: err } = await supabase.auth.signUp({ email, password });
+      const { error: err } = await supabase.auth.signUp({
+        email,
+        password,
+        // The confirmation link lands on /auth/callback, which trades the
+        // code for a session and drops them straight into the app.
+        options: { emailRedirectTo: `${window.location.origin}/auth/callback?next=/scan` },
+      });
       setBusy(false);
       if (err) {
         setError(err.message);
@@ -178,7 +184,11 @@ function AuthInner() {
       setBusy(true);
       // Deliberately ignore errors: the confirmation copy is noncommittal so
       // the form can't be used to probe which emails have accounts.
-      await supabase.auth.resetPasswordForEmail(email).catch(() => undefined);
+      await supabase.auth
+        .resetPasswordForEmail(email, {
+          redirectTo: `${window.location.origin}/auth/callback?next=/auth/update-password`,
+        })
+        .catch(() => undefined);
       setBusy(false);
     }
     setResetSent(true);

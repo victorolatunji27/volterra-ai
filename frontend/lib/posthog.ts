@@ -29,3 +29,9 @@ export function identifyUser(id: string, props: Record<string, unknown>): void {
   if (!initialized) return;
   posthog.identify(id, props);
 }
+
+/** Drop the identified user on sign-out so the next session isn't attributed to them. */
+export function resetAnalytics(): void {
+  if (!initialized) return;
+  posthog.reset();
+}

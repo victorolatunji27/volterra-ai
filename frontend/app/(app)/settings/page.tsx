@@ -3,11 +3,15 @@
 // The account card reads live tier/email/member-since from /api/users/me,
 // keeping the design's illustrative values in demo mode.
 import React, { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { ACCENTS, AccentKey, useTheme } from "@/components/theme";
 import { Sk } from "@/components/Skeleton";
 import { useToast } from "@/components/toast";
-import { fetchMe, Me } from "@/lib/api";
+import { displayName, planLabel } from "@/lib/account";
+import { fetchMe, invalidateMe, Me } from "@/lib/api";
 import { PAYWALL_ENABLED } from "@/lib/flags";
+import { resetAnalytics } from "@/lib/posthog";
+import { getSupabase } from "@/lib/supabase";
 import { useWidth } from "@/lib/useWidth";
 
 const mono = "var(--mono)";
@@ -32,9 +36,9 @@ function accountFromMe(me: Me) {
     ? new Date(created).toLocaleDateString("en-US", { month: "long", year: "numeric" })
     : "—";
   return {
-    // The API has no display-name field — use the email's local part.
-    name: me.email.split("@")[0],
-    subtitle: isPro ? "Pro plan · active" : "Free plan",
+    // Shared with the sidebar so the two can't drift (lib/account.ts).
+    name: displayName(me.email),
+    subtitle: isPro ? `${planLabel(me.tier)} · active` : planLabel(me.tier),
     rows: [
       ["Email", me.email],
       // No billing fields on the backend yet — the price is display copy.
@@ -48,12 +52,24 @@ function accountFromMe(me: Me) {
 const ACCENT_LABELS: [AccentKey, string][] = [["aurora", "Ember"], ["oceanic", "Pine"], ["cosmic", "Aubergine"]];
 
 export default function SettingsPage() {
+  const router = useRouter();
   const { theme, accent, setTheme, setAccent } = useTheme();
   const { flash } = useToast();
   const w = useWidth();
   const narrow = w < 900;
   const [account, setAccount] = useState(DEMO_ACCOUNT);
   const [accountLoading, setAccountLoading] = useState(true);
+
+  const signOut = async () => {
+    const supabase = getSupabase();
+    if (supabase) await supabase.auth.signOut();
+    // Drop cached identity so the next user doesn't inherit this one's
+    // profile or analytics attribution.
+    invalidateMe();
+    resetAnalytics();
+    flash("Signed out");
+    router.push("/");
+  };
 
   useEffect(() => {
     let alive = true;
@@ -124,7 +140,7 @@ export default function SettingsPage() {
                 Manage subscription
               </button>
             ) : null}
-            <button onClick={() => flash("Signed out (demo)")} style={{ cursor: "pointer", fontFamily: "inherit", fontSize: 13.5, fontWeight: 500, color: "var(--text-2)", background: "var(--surface-2)", border: "1px solid var(--border-2)", padding: "10px 18px", borderRadius: 7 }}>
+            <button onClick={signOut} style={{ cursor: "pointer", fontFamily: "inherit", fontSize: 13.5, fontWeight: 500, color: "var(--text-2)", background: "var(--surface-2)", border: "1px solid var(--border-2)", padding: "10px 18px", borderRadius: 7 }}>
               Sign out
             </button>
           </div>

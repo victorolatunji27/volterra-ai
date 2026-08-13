@@ -1,10 +1,13 @@
 "use client";
 // App shell — sidebar navigation + main column, per the design's isApp section.
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import ErrorBoundary from "@/components/ErrorBoundary";
+import { Sk } from "@/components/Skeleton";
 import { ThemeControls, useTheme } from "@/components/theme";
 import { ICONS, svgIcon } from "@/components/icons";
+import { DEMO_IDENTITY, identityFromMe } from "@/lib/account";
+import { fetchMe } from "@/lib/api";
 import { useWidth } from "@/lib/useWidth";
 
 const NAV_ITEMS: [string, string, keyof typeof ICONS][] = [
@@ -21,6 +24,17 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { ac } = useTheme();
   const w = useWidth();
   const narrow = w < 900;
+  // null while /me is in flight; falls back to the design's illustrative
+  // identity in demo mode (fetchMe returns null without a backend).
+  const [identity, setIdentity] = useState<{ name: string; plan: string } | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    fetchMe().then((me) => {
+      if (alive) setIdentity(me ? identityFromMe(me) : DEMO_IDENTITY);
+    });
+    return () => { alive = false; };
+  }, [pathname]);
 
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
@@ -60,11 +74,22 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
           <ThemeControls />
           {!narrow ? (
             <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 10, borderRadius: 7, border: "1px solid var(--border)", background: "var(--surface-2)" }}>
-              <div style={{ width: 32, height: 32, borderRadius: "50%", background: "linear-gradient(135deg,var(--a1),var(--a3))", display: "grid", placeItems: "center", fontSize: 13, fontWeight: 600, color: "#faf6ee", flexShrink: 0 }}>A</div>
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>Alex Rivera</div>
-                <div style={{ fontSize: 11.5, color: "var(--text-3)" }}>Pro plan</div>
+              <div style={{ width: 32, height: 32, borderRadius: "50%", background: "linear-gradient(135deg,var(--a1),var(--a3))", display: "grid", placeItems: "center", fontSize: 13, fontWeight: 600, color: "#faf6ee", flexShrink: 0 }}>
+                {identity ? identity.name.charAt(0).toUpperCase() : ""}
               </div>
+              {identity ? (
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{identity.name}</div>
+                  <div style={{ fontSize: 11.5, color: "var(--text-3)" }}>{identity.plan}</div>
+                </div>
+              ) : (
+                /* Skeleton rather than the demo name, so a real user never
+                   sees someone else's identity flash before theirs loads. */
+                <div style={{ minWidth: 0, flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+                  <Sk h={11} w="70%" />
+                  <Sk h={9} w="45%" />
+                </div>
+              )}
             </div>
           ) : null}
         </div>
