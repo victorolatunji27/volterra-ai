@@ -34,6 +34,9 @@ REQUIRED_ENV_VARS = [
     "DB_USER", "DB_PASSWORD", "DB_HOST", "DB_PORT", "DB_NAME",
     "ANTHROPIC_API_KEY", "NEWSAPI_KEY", "RESEND_API_KEY",
     "UPSTASH_REDIS_REST_URL", "UPSTASH_REDIS_REST_TOKEN",
+    # Production runs on Tradier; without a key the scan would silently fall
+    # back to yfinance, which gets rate-limited from cloud IPs.
+    "TRADIER_API_KEY",
 ]
 _missing_env = [v for v in REQUIRED_ENV_VARS if not os.getenv(v)]
 if _missing_env:

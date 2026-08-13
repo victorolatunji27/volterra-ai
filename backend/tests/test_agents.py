@@ -296,6 +296,91 @@ async def test_match_alerts_no_users_returns_zero():
 
 
 # ---------------------------------------------------------------------------
+# Tradier provider
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_tradier_quote_parses_and_falls_back_across_fields():
+    import data.market_data as md
+
+    # `last` is present during market hours...
+    with patch.object(md, "_tradier_get", new=AsyncMock(return_value={"quotes": {"quote": {"last": 172.4, "close": 170.0}}})):
+        assert await md._fetch_current_price_tradier("NVDA") == 172.4
+
+    # ...and absent outside them, where close/prevclose carry the session.
+    with patch.object(md, "_tradier_get", new=AsyncMock(return_value={"quotes": {"quote": {"last": None, "close": 170.0}}})):
+        assert await md._fetch_current_price_tradier("NVDA") == 170.0
+
+    # Unknown symbol / empty payload degrades to None, never raises.
+    with patch.object(md, "_tradier_get", new=AsyncMock(return_value={"quotes": {"quote": None}})):
+        assert await md._fetch_current_price_tradier("NOPE") is None
+    with patch.object(md, "_tradier_get", new=AsyncMock(return_value=None)):
+        assert await md._fetch_current_price_tradier("NVDA") is None
+
+
+@pytest.mark.asyncio
+async def test_tradier_history_parses_list_and_single_day():
+    import data.market_data as md
+
+    payload = {"history": {"day": [
+        {"date": "2026-07-01", "close": 170.0},
+        {"date": "2026-07-02", "close": 172.4},
+    ]}}
+    with patch.object(md, "_tradier_get", new=AsyncMock(return_value=payload)):
+        series = await md._fetch_price_history_tradier("NVDA", 30)
+    assert series == [
+        {"date": "2026-07-01", "close": 170.0},
+        {"date": "2026-07-02", "close": 172.4},
+    ]
+
+    # A single-day range comes back unwrapped rather than as a list.
+    single = {"history": {"day": {"date": "2026-07-02", "close": 172.4}}}
+    with patch.object(md, "_tradier_get", new=AsyncMock(return_value=single)):
+        assert await md._fetch_price_history_tradier("NVDA", 1) == [{"date": "2026-07-02", "close": 172.4}]
+
+    # Unknown symbol → history: null.
+    with patch.object(md, "_tradier_get", new=AsyncMock(return_value={"history": None})):
+        assert await md._fetch_price_history_tradier("NOPE", 30) is None
+
+
+@pytest.mark.asyncio
+async def test_get_current_price_dispatches_on_provider():
+    import data.market_data as md
+
+    with patch.object(md, "use_tradier", return_value=True), patch.object(
+        md, "_fetch_current_price_tradier", new=AsyncMock(return_value=1.23)
+    ) as tradier, patch.object(md, "_fetch_current_price") as yf_impl:
+        assert await md.get_current_price("NVDA") == 1.23
+    tradier.assert_awaited_once()
+    yf_impl.assert_not_called()
+
+    with patch.object(md, "use_tradier", return_value=False), patch.object(
+        md, "_fetch_current_price", return_value=4.56
+    ) as yf_impl:
+        assert await md.get_current_price("NVDA") == 4.56
+    yf_impl.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_flow_fetch_falls_back_to_yfinance_when_tradier_returns_nothing():
+    import data.options_fetcher as of
+
+    yf_rows = [{"ticker": "NVDA", "oi_ratio": 4.1}]
+    with patch.object(of, "use_tradier", return_value=True), patch.object(
+        of, "fetch_unusual_options_flow", new=AsyncMock(return_value=[])
+    ), patch.object(of, "fetch_options_flow_yfinance", new=AsyncMock(return_value=yf_rows)):
+        # An empty Tradier result must not look like "no unusual activity".
+        assert await of.fetch_options_flow() == yf_rows
+
+    tradier_rows = [{"ticker": "TSLA", "oi_ratio": 2.2}]
+    with patch.object(of, "use_tradier", return_value=True), patch.object(
+        of, "fetch_unusual_options_flow", new=AsyncMock(return_value=tradier_rows)
+    ), patch.object(of, "fetch_options_flow_yfinance", new=AsyncMock()) as yf_impl:
+        assert await of.fetch_options_flow() == tradier_rows
+    yf_impl.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
 # send_alert_email / build_alert_text
 # ---------------------------------------------------------------------------
 

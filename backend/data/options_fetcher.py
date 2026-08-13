@@ -13,8 +13,7 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-TRADIER_API_KEY: str = os.getenv("TRADIER_API_KEY", "")
-TRADIER_BASE_URL: str = os.getenv("TRADIER_BASE_URL", "https://sandbox.tradier.com/v1").rstrip("/")
+from config import TRADIER_API_KEY, TRADIER_BASE_URL, use_tradier
 
 WATCHLIST: list[str] = [
     "AAPL", "NVDA", "TSLA", "MSFT", "AMD", "META", "GOOGL", "AMZN", "SPY", "QQQ",
@@ -325,3 +324,34 @@ async def fetch_options_flow_yfinance() -> list[dict[str, Any]]:
     )
 
     return top_10
+
+
+# ---------------------------------------------------------------------------
+# Provider dispatch — the scan pipeline's entry point
+# ---------------------------------------------------------------------------
+
+async def fetch_options_flow() -> list[dict[str, Any]]:
+    """
+    Return the top-10 unusual-flow tickers from the configured provider.
+
+    Tradier is the production source (real market-data API, survives cloud
+    IPs); yfinance remains as the keyless fallback for local development and
+    as an escape hatch if a Tradier call regresses. Both return the same
+    shape, so the rest of the pipeline is provider-agnostic.
+    """
+    if use_tradier():
+        logger.info("fetch_options_flow: using Tradier (%s).", TRADIER_BASE_URL)
+        results = await fetch_unusual_options_flow()
+        if results:
+            return results
+        # Never silently return an empty scan when a fallback exists — an
+        # unverified Tradier response shape would otherwise look like "no
+        # unusual activity today" instead of an integration failure.
+        logger.error(
+            "fetch_options_flow: Tradier returned no results — falling back to yfinance. "
+            "Check the API key, entitlements, and response shapes."
+        )
+        return await fetch_options_flow_yfinance()
+
+    logger.info("fetch_options_flow: using yfinance (no Tradier key configured).")
+    return await fetch_options_flow_yfinance()

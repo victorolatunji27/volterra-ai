@@ -14,15 +14,38 @@
 
 import asyncio
 import logging
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
+import httpx
 import pandas as pd
 import yfinance as yf
 
 from cache import cache_get_json, cache_set_json
+from config import TRADIER_API_KEY, TRADIER_BASE_URL, use_tradier
 
 logger = logging.getLogger(__name__)
+
+_TRADIER_TIMEOUT = 10.0
+
+
+async def _tradier_get(path: str, params: dict[str, Any]) -> dict[str, Any] | None:
+    """GET a Tradier market-data endpoint. Returns parsed JSON, or None on failure."""
+    try:
+        async with httpx.AsyncClient(timeout=_TRADIER_TIMEOUT) as client:
+            response = await client.get(
+                f"{TRADIER_BASE_URL}{path}",
+                params=params,
+                headers={
+                    "Authorization": f"Bearer {TRADIER_API_KEY}",
+                    "Accept": "application/json",
+                },
+            )
+            response.raise_for_status()
+            return response.json()
+    except Exception as exc:
+        logger.error("_tradier_get(%s): request failed — %s", path, exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -167,21 +190,92 @@ def _fetch_price_history(symbol: str, days: int) -> list[dict] | None:
 
 
 # ---------------------------------------------------------------------------
+# Tradier implementations
+#
+# Response shapes below follow Tradier's documented market-data payloads but
+# have not yet been exercised against a live key — every field is read
+# defensively so an unexpected shape degrades to None rather than raising.
+# ---------------------------------------------------------------------------
+
+async def _fetch_current_price_tradier(ticker: str) -> float | None:
+    """Latest trade price for *ticker* from /markets/quotes."""
+    data = await _tradier_get("/markets/quotes", {"symbols": ticker})
+    if not data:
+        return None
+
+    quote = (data.get("quotes") or {}).get("quote")
+    if isinstance(quote, list):          # multiple symbols requested
+        quote = quote[0] if quote else None
+    if not isinstance(quote, dict):
+        logger.warning("_fetch_current_price_tradier(%s): no quote in response.", ticker)
+        return None
+
+    # `last` is absent outside market hours; close/prevclose carry the session.
+    for field in ("last", "close", "prevclose"):
+        value = quote.get(field)
+        if isinstance(value, (int, float)) and value > 0:
+            return float(value)
+
+    logger.warning("_fetch_current_price_tradier(%s): no usable price field.", ticker)
+    return None
+
+
+async def _fetch_price_history_tradier(symbol: str, days: int) -> list[dict] | None:
+    """Daily closes for the last *days* calendar days from /markets/history."""
+    end = date.today()
+    start = end - timedelta(days=days)
+    data = await _tradier_get(
+        "/markets/history",
+        {
+            "symbol": symbol,
+            "interval": "daily",
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+        },
+    )
+    if not data:
+        return None
+
+    history = data.get("history")
+    if not isinstance(history, dict):
+        # Tradier returns history: null for an unknown symbol.
+        logger.warning("_fetch_price_history_tradier(%s): no history in response.", symbol)
+        return None
+
+    days_payload = history.get("day")
+    if isinstance(days_payload, dict):   # single-day responses aren't wrapped
+        days_payload = [days_payload]
+    if not isinstance(days_payload, list) or not days_payload:
+        return None
+
+    series = [
+        {"date": d["date"], "close": round(float(d["close"]), 2)}
+        for d in days_payload
+        if isinstance(d, dict) and d.get("date") and isinstance(d.get("close"), (int, float))
+    ]
+    return series or None
+
+
+# ---------------------------------------------------------------------------
 # Public async API
 # ---------------------------------------------------------------------------
 
 async def get_current_price(ticker: str) -> float | None:
     """
-    Return the most recent closing price for *ticker* as a float.
+    Return the most recent price for *ticker* as a float.
 
-    yfinance is synchronous; the blocking call is offloaded to a thread pool
-    via asyncio.to_thread() so the event loop is never blocked.
+    Uses Tradier when configured, else yfinance. yfinance is synchronous, so
+    that path is offloaded via asyncio.to_thread() to keep the event loop
+    free; the Tradier path is natively async.
 
     Returns:
-        The closing price as a float, or None if the fetch fails.
+        The price as a float, or None if the fetch fails.
     """
     try:
-        price = await asyncio.to_thread(_fetch_current_price, ticker)
+        if use_tradier():
+            price = await _fetch_current_price_tradier(ticker)
+        else:
+            price = await asyncio.to_thread(_fetch_current_price, ticker)
         if price is None:
             return None
         logger.debug("get_current_price(%s) → %.4f", ticker, price)
@@ -269,9 +363,12 @@ async def get_price_history(symbol: str, days: int = 30) -> list[dict] | None:
         return cached
 
     try:
-        series = await asyncio.to_thread(_fetch_price_history, symbol, days)
+        if use_tradier():
+            series = await _fetch_price_history_tradier(symbol, days)
+        else:
+            series = await asyncio.to_thread(_fetch_price_history, symbol, days)
     except Exception as exc:
-        logger.error("get_price_history(%s): yfinance failed — %s", symbol, exc, exc_info=True)
+        logger.error("get_price_history(%s): provider call failed — %s", symbol, exc, exc_info=True)
         return None
 
     if not series:

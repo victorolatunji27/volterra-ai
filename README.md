@@ -8,7 +8,7 @@ AI-powered options flow analysis and daily market briefing platform for retail t
 
 ```mermaid
 flowchart LR
-    SCHED[APScheduler<br>6:30 UTC weekdays] --> COLLECT[Data Collectors<br>yfinance + NewsAPI]
+    SCHED[APScheduler<br>6:30 UTC weekdays] --> COLLECT[Data Collectors<br>Tradier + NewsAPI]
     COLLECT --> AI[Claude AI Agents<br>flow analysis / news synthesis / strategy tagging]
     AI --> REDIS[(Upstash Redis<br>summary cache)]
     AI --> PG[(Supabase Postgres)]
@@ -35,7 +35,7 @@ flowchart LR
 
 ## Features
 
-- Daily scan of a 30-ticker watchlist for unusual options activity (volume/open-interest ratio) via yfinance
+- Daily scan of a 30-ticker watchlist for unusual options activity (volume/open-interest ratio) via the Tradier market-data API
 - AI-generated options flow summaries via Claude claude-sonnet-4-20250514: setup summary, flow interpretation, and risk note per ticker, with strict JSON output and a one-shot retry on parse failure
 - News catalyst synthesis: recent headlines per ticker condensed into a catalyst note merged into each summary
 - Strategy classification into a 7-tag taxonomy (momentum, earnings_play, iv_crush, breakout, hedge, contrarian, neutral)
@@ -90,7 +90,11 @@ ENABLE_SCHEDULER=false python -m pytest tests/ -v
 | `ALLOWED_ORIGINS` | Yes (prod) | Comma-separated CORS origins | your Vercel URL |
 | `ENVIRONMENT` | No | `development` / `production` | — |
 | `ENABLE_SCHEDULER` | No | Set `false` to run the API without APScheduler jobs | — |
-| `TRADIER_API_KEY` | No (until Tradier swap) | Real-time options data upgrade path | developer.tradier.com |
+| `TRADIER_API_KEY` | Yes (prod) | Market-data source for options flow, quotes, and price history | developer.tradier.com |
+| `TRADIER_BASE_URL` | No | Sandbox (default, delayed) vs production base URL | developer.tradier.com |
+| `MARKET_DATA_PROVIDER` | No | `tradier` \| `yfinance`; defaults to Tradier when a key is set | — |
+| `BILLING_ENABLED` | No | Leave `false` for the free-tier launch (see below) | — |
+| `APP_BASE_URL` | No | Public site URL used in digest email links | — |
 
 ## Rate limits
 
@@ -126,12 +130,13 @@ Exceeding a limit returns `429` with JSON
 
 **Polling (daily batch) over WebSocket streaming.** Retail users act on a morning brief, not millisecond flow, so a 6:30 UTC batch matches the product and costs almost nothing. The limitation is staleness during the trading day. If users demanded intraday alerts, I would add a 15-minute scan loop before reaching for streaming infrastructure.
 
-**yfinance over Tradier.** yfinance requires no API key and gets the pipeline moving immediately. Tradier gives real-time flow and richer chain data. The upgrade path is: prove the pipeline works with yfinance, then swap in Tradier before onboarding real users — the fetcher already has a Tradier implementation behind the same interface.
+**Tradier over yfinance.** The pipeline was built against yfinance because it needs no API key and got the first scan working same-day. It ships on Tradier: yfinance scrapes an unofficial Yahoo endpoint that rate-limits aggressively from cloud IPs, which is exactly where this runs, and Tradier returns real chain data including per-contract greeks. The downside is a hard dependency on an API key and its entitlements, so both providers stay wired behind `MARKET_DATA_PROVIDER` — yfinance remains the keyless path for local development and an instant rollback if a Tradier call regresses. At 10,000 users I would revisit the polling cadence long before the provider.
 
 ## Known limitations
 
 - IV rank is approximate (current-chain IV with a VIX proxy, not true 52-week historical IV rank)
-- Options data is delayed (yfinance; the free Tradier tier is also 15-minute delayed)
+- Options data is delayed on Tradier's sandbox tier; live quotes need a production key
+- IV rank is the one metric still sourced from yfinance (its 52-week VIX anchor has no clean Tradier equivalent); it degrades to null without breaking a scan
 - The digest sends only on market days (Mon–Fri cron)
 - The Anthropic account must have credits or all AI summaries degrade to null (the pipeline still stores raw scans)
 

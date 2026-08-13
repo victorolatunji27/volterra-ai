@@ -22,7 +22,7 @@ from agents.news_fetcher import synthesize_news
 from config import BILLING_ENABLED, FREE_DIGEST_DAYS
 from data.market_data import get_current_price, get_iv_rank
 from data.news_fetcher import fetch_news_for_ticker
-from data.options_fetcher import fetch_options_flow_yfinance
+from data.options_fetcher import fetch_options_flow
 from db.database import async_session
 from db.models import AiSummary, AlertLog, DigestLog, FlowScan, UserProfile
 from mailer.alerts import build_alert_subject, build_alert_text, send_alert_email
@@ -177,8 +177,8 @@ async def run_daily_scan() -> list[int]:
 
     Steps
     ─────
-    1. Fetch the top-10 unusual-flow tickers via fetch_options_flow_yfinance()
-       (yfinance — no API key required).
+    1. Fetch the top-10 unusual-flow tickers via fetch_options_flow()
+       (Tradier when TRADIER_API_KEY is set, else yfinance).
     2. For each ticker, concurrently fetch current price, IV rank, and news.
        Each ticker is wrapped in its own try/except so one failure never
        stops the rest.
@@ -193,12 +193,12 @@ async def run_daily_scan() -> list[int]:
     scan_start = time.perf_counter()
     logger.info("run_daily_scan: starting at %s UTC", datetime.now(tz=timezone.utc).isoformat())
 
-    # ── Step 1: options flow via yfinance ───────────────────────────────────
-    logger.info("run_daily_scan: fetching unusual options flow (yfinance)…")
+    # ── Step 1: options flow from the configured provider ───────────────────
+    logger.info("run_daily_scan: fetching unusual options flow…")
     try:
-        flow_results = await fetch_options_flow_yfinance()
+        flow_results = await fetch_options_flow()
     except Exception as exc:
-        logger.error("run_daily_scan: fetch_options_flow_yfinance failed — %s", exc, exc_info=True)
+        logger.error("run_daily_scan: fetch_options_flow failed — %s", exc, exc_info=True)
         return []
 
     if not flow_results:

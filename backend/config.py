@@ -17,3 +17,23 @@ BILLING_ENABLED: bool = os.getenv("BILLING_ENABLED", "false").lower() == "true"
 # Free users keep receiving the digest for this many days after signup —
 # only applied when BILLING_ENABLED is True.
 FREE_DIGEST_DAYS: int = 30
+
+# ── Market data provider ─────────────────────────────────────────────────────
+# Tradier is the production source: a real market-data API with an API key,
+# rather than yfinance's unofficial Yahoo scraping (which gets rate-limited
+# from cloud IPs like Railway's). Defaults to Tradier whenever a key is
+# present, so setting TRADIER_API_KEY is all it takes to switch; force either
+# side with MARKET_DATA_PROVIDER=tradier|yfinance.
+TRADIER_API_KEY: str = os.getenv("TRADIER_API_KEY", "")
+TRADIER_BASE_URL: str = os.getenv(
+    "TRADIER_BASE_URL", "https://sandbox.tradier.com/v1"
+).rstrip("/")
+
+MARKET_DATA_PROVIDER: str = os.getenv(
+    "MARKET_DATA_PROVIDER", "tradier" if TRADIER_API_KEY else "yfinance"
+).lower()
+
+
+def use_tradier() -> bool:
+    """True when live calls should go to Tradier rather than yfinance."""
+    return MARKET_DATA_PROVIDER == "tradier" and bool(TRADIER_API_KEY)
