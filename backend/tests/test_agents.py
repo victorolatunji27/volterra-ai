@@ -362,6 +362,37 @@ async def test_get_current_price_dispatches_on_provider():
 
 
 @pytest.mark.asyncio
+async def test_get_current_price_falls_back_to_yfinance_when_tradier_fails():
+    # A bad/expired/rate-limited Tradier key must not silently drop the
+    # ticker — this is exactly the bug a placeholder TRADIER_API_KEY exposed
+    # (Tradier 401s, price came back None, every ticker got skipped).
+    import data.market_data as md
+
+    with patch.object(md, "use_tradier", return_value=True), patch.object(
+        md, "_fetch_current_price_tradier", new=AsyncMock(return_value=None)
+    ) as tradier, patch.object(md, "_fetch_current_price", return_value=172.4) as yf_impl:
+        assert await md.get_current_price("NVDA") == 172.4
+    tradier.assert_awaited_once()
+    yf_impl.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_price_history_falls_back_to_yfinance_when_tradier_fails():
+    import data.market_data as md
+
+    series = [{"date": "2026-08-14", "close": 172.4}]
+    with patch.object(md, "cache_get_json", new=AsyncMock(return_value=None)), \
+         patch.object(md, "cache_set_json", new=AsyncMock(return_value=True)), \
+         patch.object(md, "use_tradier", return_value=True), \
+         patch.object(md, "_fetch_price_history_tradier", new=AsyncMock(return_value=None)) as tradier, \
+         patch.object(md, "_fetch_price_history", return_value=series) as yf_impl:
+        result = await md.get_price_history("NVDA", 30)
+    assert result == series
+    tradier.assert_awaited_once()
+    yf_impl.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_flow_fetch_falls_back_to_yfinance_when_tradier_returns_nothing():
     import data.options_fetcher as of
 

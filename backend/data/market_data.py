@@ -268,12 +268,24 @@ async def get_current_price(ticker: str) -> float | None:
     that path is offloaded via asyncio.to_thread() to keep the event loop
     free; the Tradier path is natively async.
 
+    A failed/unauthorized/rate-limited Tradier call falls back to yfinance
+    rather than returning None outright — a missing price is a hard failure
+    for the caller (the whole ticker gets skipped from the scan), so this
+    mirrors the same fallback fetch_options_flow() already has, instead of
+    letting one bad Tradier response silently drop every ticker.
+
     Returns:
-        The price as a float, or None if the fetch fails.
+        The price as a float, or None if both providers fail.
     """
     try:
         if use_tradier():
             price = await _fetch_current_price_tradier(ticker)
+            if price is None:
+                logger.warning(
+                    "get_current_price(%s): Tradier returned nothing — falling back to yfinance.",
+                    ticker,
+                )
+                price = await asyncio.to_thread(_fetch_current_price, ticker)
         else:
             price = await asyncio.to_thread(_fetch_current_price, ticker)
         if price is None:
@@ -353,8 +365,10 @@ async def get_price_history(symbol: str, days: int = 30) -> list[dict] | None:
     symbol per day is plenty.
 
     yfinance is synchronous; the blocking call is offloaded via
-    asyncio.to_thread(). Returns None on an empty result or any failure, so the
-    caller can degrade gracefully rather than fail the whole request.
+    asyncio.to_thread(). A failed/empty Tradier response falls back to
+    yfinance (same reasoning as get_current_price) before finally returning
+    None, so the caller can degrade gracefully rather than fail the whole
+    request over one bad Tradier call.
     """
     cache_key = f"price_history:{symbol.upper()}:{date.today().isoformat()}"
 
@@ -365,6 +379,12 @@ async def get_price_history(symbol: str, days: int = 30) -> list[dict] | None:
     try:
         if use_tradier():
             series = await _fetch_price_history_tradier(symbol, days)
+            if not series:
+                logger.warning(
+                    "get_price_history(%s): Tradier returned nothing — falling back to yfinance.",
+                    symbol,
+                )
+                series = await asyncio.to_thread(_fetch_price_history, symbol, days)
         else:
             series = await asyncio.to_thread(_fetch_price_history, symbol, days)
     except Exception as exc:
