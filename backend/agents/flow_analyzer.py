@@ -17,7 +17,12 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-MODEL_VERSION = "claude-sonnet-4-20250514"
+# claude-sonnet-4-20250514 was retired (confirmed via a live 404, not a
+# billing error). Repinned to claude-sonnet-4-6 — same generation already
+# proven against a structured-JSON prompt elsewhere in this codebase
+# (agents/journal_agent.py's REVIEW_MODEL), which is the lowest-risk choice
+# given the few-shot examples below were tuned against Sonnet-4-era behavior.
+MODEL_VERSION = "claude-sonnet-4-6"
 
 REQUIRED_FLOW_KEYS = {
     "ticker", "call_volume", "put_volume", "oi_ratio",
